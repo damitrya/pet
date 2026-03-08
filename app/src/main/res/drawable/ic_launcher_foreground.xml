@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Background circle -->
+    <path
+        android:fillColor="#0F3460"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0" />
+    <!-- Simple companion face -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,48 C44,46 46,44 48,44 C50,44 52,46 52,48 C52,50 50,52 48,52 C46,52 44,50 44,48Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,48 C56,46 58,44 60,44 C62,44 64,46 64,48 C64,50 62,52 60,52 C58,52 56,50 56,48Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,58 Q54,68 63,58"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF" />
+</vector>

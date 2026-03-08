@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DriveCompanion</string>
+    <string name="app_subtitle">Virtual driving companion</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">DriveCompanion</string>
+    <string name="notification_channel_description">Companion service notification</string>
+    <string name="notification_title">DriveCompanion active</string>
+    <string name="notification_text_active">Companion is visible</string>
+    <string name="notification_text_hidden">Companion is hidden</string>
+
+    <!-- Actions -->
+    <string name="action_show">Show</string>
+    <string name="action_hide">Hide</string>
+    <string name="action_stop">Stop</string>
+
+    <!-- Settings Sections -->
+    <string name="section_permissions">Permissions</string>
+    <string name="section_appearance">Appearance</string>
+    <string name="section_behavior">Behavior</string>
+    <string name="section_thresholds">Speed thresholds</string>
+
+    <!-- Permissions -->
+    <string name="permission_overlay">Display over other apps</string>
+    <string name="permission_location">Location access</string>
+    <string name="btn_grant_permissions">Grant permissions</string>
+
+    <!-- Service -->
+    <string name="btn_start_service">Start companion</string>
+    <string name="btn_stop_service">Stop companion</string>
+
+    <!-- Appearance -->
+    <string name="label_character_size">Character size</string>
+    <string name="label_opacity">Opacity</string>
+    <string name="size_value_format">%d dp</string>
+    <string name="opacity_value_format">%d%%</string>
+
+    <!-- Behavior -->
+    <string name="label_music_reaction">React to music</string>
+    <string name="label_sensor_reaction">React to braking and turns</string>
+    <string name="label_auto_start">Auto-start on boot</string>
+
+    <!-- Thresholds -->
+    <string name="label_threshold_walk">Walk (from)</string>
+    <string name="label_threshold_cruise">Cruise (from)</string>
+    <string name="label_threshold_speed">Speed (from)</string>
+    <string name="label_threshold_turbo">Turbo (from)</string>
+    <string name="unit_kmh">km/h</string>
+    <string name="btn_save_thresholds">Save thresholds</string>
+    <string name="thresholds_saved">Thresholds saved</string>
+    <string name="thresholds_error">Error: enter valid numbers</string>
+
+    <!-- Version -->
+    <string name="version_info">DriveCompanion v0.1.0 (MVP)</string>
+</resources>
