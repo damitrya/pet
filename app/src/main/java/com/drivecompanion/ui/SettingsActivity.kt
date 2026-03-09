@@ -7,11 +7,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.drivecompanion.R
 import com.drivecompanion.data.SettingsRepository
@@ -34,7 +34,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private val locationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
+    ) { _ ->
         updatePermissionStatus()
     }
 
@@ -46,7 +46,10 @@ class SettingsActivity : AppCompatActivity() {
         settings = SettingsRepository(this)
 
         setupUI()
+        setupProfileUI()
+        setupDailySettingsUI()
         updatePermissionStatus()
+        updateProfileVisibility()
     }
 
     override fun onResume() {
@@ -73,7 +76,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Character size slider
-        binding.seekbarSize.max = 250 - 80  // range: 80-250 dp
+        binding.seekbarSize.max = 250 - 80
         binding.seekbarSize.progress = settings.characterSize - 80
         binding.tvSizeValue.text = getString(R.string.size_value_format, settings.characterSize)
         binding.seekbarSize.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -92,7 +95,7 @@ class SettingsActivity : AppCompatActivity() {
         binding.tvOpacityValue.text = getString(R.string.opacity_value_format, settings.overlayOpacity)
         binding.seekbarOpacity.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val opacity = maxOf(progress, 10) // minimum 10%
+                val opacity = maxOf(progress, 10)
                 settings.overlayOpacity = opacity
                 binding.tvOpacityValue.text = getString(R.string.opacity_value_format, opacity)
             }
@@ -123,6 +126,90 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnGrantPermissions.setOnClickListener {
             requestPermissions()
         }
+    }
+
+    private fun setupProfileUI() {
+        when (settings.profileMode) {
+            "manual_auto" -> binding.radioProfileAuto.isChecked = true
+            "auto_bluetooth" -> binding.radioProfileBluetooth.isChecked = true
+            else -> binding.radioProfileDaily.isChecked = true
+        }
+
+        binding.radioProfile.setOnCheckedChangeListener { _, checkedId ->
+            when (checkedId) {
+                R.id.radio_profile_daily -> {
+                    settings.profileMode = "manual_daily"
+                    settings.activeProfile = "DAILY"
+                }
+                R.id.radio_profile_auto -> {
+                    settings.profileMode = "manual_auto"
+                    settings.activeProfile = "AUTO"
+                }
+                R.id.radio_profile_bluetooth -> {
+                    settings.profileMode = "auto_bluetooth"
+                }
+            }
+            updateProfileVisibility()
+        }
+    }
+
+    private fun setupDailySettingsUI() {
+        // Step goal slider: 3000-30000, step 1000
+        val stepGoalMin = 3000
+        val stepGoalMax = 30000
+        val stepGoalStep = 1000
+        binding.seekbarStepGoal.max = (stepGoalMax - stepGoalMin) / stepGoalStep
+        binding.seekbarStepGoal.progress = (settings.stepGoal - stepGoalMin) / stepGoalStep
+        binding.tvStepGoalValue.text = getString(R.string.step_goal_format, settings.stepGoal)
+        binding.seekbarStepGoal.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val goal = stepGoalMin + progress * stepGoalStep
+                settings.stepGoal = goal
+                binding.tvStepGoalValue.text = getString(R.string.step_goal_format, goal)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Weather toggle
+        binding.switchWeather.isChecked = settings.weatherEnabled
+        binding.switchWeather.setOnCheckedChangeListener { _, isChecked ->
+            settings.weatherEnabled = isChecked
+        }
+
+        // App watch threshold slider: 10-90 min
+        binding.seekbarAppWatch.max = 90 - 10
+        binding.seekbarAppWatch.progress = settings.appWatchThresholdMinutes - 10
+        binding.tvAppWatchValue.text = getString(R.string.app_watch_format, settings.appWatchThresholdMinutes)
+        binding.seekbarAppWatch.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val minutes = progress + 10
+                settings.appWatchThresholdMinutes = minutes
+                binding.tvAppWatchValue.text = getString(R.string.app_watch_format, minutes)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Low battery threshold slider: 5-25%
+        binding.seekbarLowBattery.max = 25 - 5
+        binding.seekbarLowBattery.progress = settings.lowBatteryThreshold - 5
+        binding.tvLowBatteryValue.text = getString(R.string.battery_threshold_format, settings.lowBatteryThreshold)
+        binding.seekbarLowBattery.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                val threshold = progress + 5
+                settings.lowBatteryThreshold = threshold
+                binding.tvLowBatteryValue.text = getString(R.string.battery_threshold_format, threshold)
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+    }
+
+    private fun updateProfileVisibility() {
+        val isAutoOnly = settings.profileMode == "manual_auto"
+        binding.cardDailySettings.visibility = if (isAutoOnly) View.GONE else View.VISIBLE
+        binding.cardThresholds.visibility = if (settings.profileMode == "manual_daily") View.GONE else View.VISIBLE
     }
 
     private fun setupThresholdInput() {
@@ -169,6 +256,9 @@ class SettingsActivity : AppCompatActivity() {
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACTIVITY_RECOGNITION)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             permissions.add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
         }
@@ -181,18 +271,34 @@ class SettingsActivity : AppCompatActivity() {
             this, Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
 
+        val hasActivity = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACTIVITY_RECOGNITION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else true
+
+        val hasPhone = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.READ_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+
         val statusText = buildString {
             append(getString(R.string.permission_overlay))
             append(if (hasOverlay) " ✓" else " ✗")
             append("\n")
             append(getString(R.string.permission_location))
             append(if (hasLocation) " ✓" else " ✗")
+            append("\n")
+            append(getString(R.string.permission_activity))
+            append(if (hasActivity) " ✓" else " ✗")
+            append("\n")
+            append(getString(R.string.permission_phone))
+            append(if (hasPhone) " ✓" else " ✗")
         }
         binding.tvPermissionStatus.text = statusText
 
-        val allGranted = hasOverlay && hasLocation
-        binding.btnToggleService.isEnabled = allGranted
-        binding.btnGrantPermissions.isEnabled = !allGranted
+        val allRequired = hasOverlay && hasLocation
+        binding.btnToggleService.isEnabled = allRequired
+        binding.btnGrantPermissions.isEnabled = !allRequired
     }
 
     private fun updateServiceButton() {

@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">DriveCompanion</string>
-    <string name="app_subtitle">Виртуальный попутчик</string>
+    <string name="app_name">Companion</string>
+    <string name="app_subtitle">Виртуальный компаньон</string>
 
     <!-- Notification -->
-    <string name="notification_channel_name">DriveCompanion</string>
-    <string name="notification_channel_description">Уведомление о работе попутчика</string>
-    <string name="notification_title">DriveCompanion активен</string>
-    <string name="notification_text_active">Попутчик отображается</string>
-    <string name="notification_text_hidden">Попутчик скрыт</string>
+    <string name="notification_channel_name">Companion</string>
+    <string name="notification_channel_description">Уведомление о работе компаньона</string>
+    <string name="notification_title">Companion активен</string>
+    <string name="notification_text_active">Компаньон отображается</string>
+    <string name="notification_text_hidden">Компаньон скрыт</string>
 
     <!-- Actions -->
     <string name="action_show">Показать</string>
@@ -20,15 +20,21 @@
     <string name="section_appearance">Внешний вид</string>
     <string name="section_behavior">Поведение</string>
     <string name="section_thresholds">Пороги скорости</string>
+    <string name="section_profile">Профиль</string>
+    <string name="section_daily">Повседневный режим</string>
+    <string name="section_advanced">Дополнительно</string>
 
     <!-- Permissions -->
     <string name="permission_overlay">Отображение поверх приложений</string>
     <string name="permission_location">Доступ к местоположению</string>
+    <string name="permission_activity">Распознавание активности</string>
+    <string name="permission_phone">Состояние телефона</string>
+    <string name="permission_usage">Статистика использования</string>
     <string name="btn_grant_permissions">Предоставить разрешения</string>
 
     <!-- Service -->
-    <string name="btn_start_service">Запустить попутчика</string>
-    <string name="btn_stop_service">Остановить попутчика</string>
+    <string name="btn_start_service">Запустить компаньона</string>
+    <string name="btn_stop_service">Остановить компаньона</string>
 
     <!-- Appearance -->
     <string name="label_character_size">Размер персонажа</string>
@@ -41,6 +47,30 @@
     <string name="label_sensor_reaction">Реакция на торможение и повороты</string>
     <string name="label_auto_start">Автозапуск при включении</string>
 
+    <!-- Profile -->
+    <string name="label_profile_mode">Режим профиля</string>
+    <string name="profile_auto">Авто</string>
+    <string name="profile_daily">Повседневный</string>
+    <string name="profile_auto_bluetooth">Автоопределение (Bluetooth)</string>
+    <string name="label_bluetooth_device">Bluetooth-устройство для авто</string>
+    <string name="bluetooth_not_selected">Не выбрано</string>
+
+    <!-- Daily profile -->
+    <string name="label_step_goal">Цель шагов за день</string>
+    <string name="step_goal_format">%d шагов</string>
+    <string name="label_weather_enabled">Погодные модификаторы</string>
+    <string name="label_app_watch_threshold">Порог времени в соцсетях</string>
+    <string name="app_watch_format">%d мин</string>
+    <string name="label_low_battery_threshold">Порог низкого заряда</string>
+    <string name="battery_threshold_format">%d%%</string>
+
+    <!-- Time ranges -->
+    <string name="label_morning_start">Начало утра</string>
+    <string name="label_day_start">Начало дня</string>
+    <string name="label_evening_start">Начало вечера</string>
+    <string name="label_night_start">Начало ночи</string>
+    <string name="time_hour_format">%d:00</string>
+
     <!-- Thresholds -->
     <string name="label_threshold_walk">Шаг (от)</string>
     <string name="label_threshold_cruise">Круиз (от)</string>
@@ -52,5 +82,5 @@
     <string name="thresholds_error">Ошибка: введите корректные числа</string>
 
     <!-- Version -->
-    <string name="version_info">DriveCompanion v0.1.0 (MVP)</string>
+    <string name="version_info">Companion v2.0</string>
 </resources>

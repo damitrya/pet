@@ -5,7 +5,7 @@
     <!-- Overlay permission -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- Location for GPS speed -->
+    <!-- Location for GPS speed & weather -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
@@ -23,6 +23,23 @@
     <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Step counter / activity recognition (Android 10+, optional) -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+
+    <!-- Weather API (optional) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- App usage monitoring (optional, special permission) -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Phone call detection (optional) -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+
+    <!-- Bluetooth auto-profile switching (optional) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -34,7 +51,6 @@
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="true"
-            android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -63,7 +79,7 @@
             android:name=".receiver.CompanionTileService"
             android:exported="true"
             android:icon="@drawable/ic_companion_notification"
-            android:label="DriveCompanion"
+            android:label="Companion"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
