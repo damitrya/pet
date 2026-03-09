@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">DriveCompanion</string>
-    <string name="app_subtitle">Virtual driving companion</string>
+    <string name="app_name">Companion</string>
+    <string name="app_subtitle">Virtual companion</string>
 
     <!-- Notification -->
-    <string name="notification_channel_name">DriveCompanion</string>
+    <string name="notification_channel_name">Companion</string>
     <string name="notification_channel_description">Companion service notification</string>
-    <string name="notification_title">DriveCompanion active</string>
+    <string name="notification_title">Companion active</string>
     <string name="notification_text_active">Companion is visible</string>
     <string name="notification_text_hidden">Companion is hidden</string>
 
@@ -20,10 +20,16 @@
     <string name="section_appearance">Appearance</string>
     <string name="section_behavior">Behavior</string>
     <string name="section_thresholds">Speed thresholds</string>
+    <string name="section_profile">Profile</string>
+    <string name="section_daily">Daily mode</string>
+    <string name="section_advanced">Advanced</string>
 
     <!-- Permissions -->
     <string name="permission_overlay">Display over other apps</string>
     <string name="permission_location">Location access</string>
+    <string name="permission_activity">Activity recognition</string>
+    <string name="permission_phone">Phone state</string>
+    <string name="permission_usage">Usage statistics</string>
     <string name="btn_grant_permissions">Grant permissions</string>
 
     <!-- Service -->
@@ -41,6 +47,30 @@
     <string name="label_sensor_reaction">React to braking and turns</string>
     <string name="label_auto_start">Auto-start on boot</string>
 
+    <!-- Profile -->
+    <string name="label_profile_mode">Profile mode</string>
+    <string name="profile_auto">Auto</string>
+    <string name="profile_daily">Daily</string>
+    <string name="profile_auto_bluetooth">Auto-detect (Bluetooth)</string>
+    <string name="label_bluetooth_device">Bluetooth device for auto mode</string>
+    <string name="bluetooth_not_selected">Not selected</string>
+
+    <!-- Daily profile -->
+    <string name="label_step_goal">Daily step goal</string>
+    <string name="step_goal_format">%d steps</string>
+    <string name="label_weather_enabled">Weather modifiers</string>
+    <string name="label_app_watch_threshold">Social media time limit</string>
+    <string name="app_watch_format">%d min</string>
+    <string name="label_low_battery_threshold">Low battery threshold</string>
+    <string name="battery_threshold_format">%d%%</string>
+
+    <!-- Time ranges -->
+    <string name="label_morning_start">Morning start</string>
+    <string name="label_day_start">Day start</string>
+    <string name="label_evening_start">Evening start</string>
+    <string name="label_night_start">Night start</string>
+    <string name="time_hour_format">%d:00</string>
+
     <!-- Thresholds -->
     <string name="label_threshold_walk">Walk (from)</string>
     <string name="label_threshold_cruise">Cruise (from)</string>
@@ -52,5 +82,5 @@
     <string name="thresholds_error">Error: enter valid numbers</string>
 
     <!-- Version -->
-    <string name="version_info">DriveCompanion v0.1.0 (MVP)</string>
+    <string name="version_info">Companion v2.0</string>
 </resources>

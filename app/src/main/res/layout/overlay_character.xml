@@ -9,4 +9,9 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <com.drivecompanion.overlay.WeatherOverlayView
+        android:id="@+id/weather_overlay_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
 </FrameLayout>

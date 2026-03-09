@@ -20,10 +20,12 @@ class OverlayManager(
     private var windowManager: WindowManager? = null
     private var overlayView: View? = null
     private var characterView: CharacterView? = null
+    private var weatherOverlayView: WeatherOverlayView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isShowing = false
 
     fun getCharacterView(): CharacterView? = characterView
+    fun getWeatherOverlayView(): WeatherOverlayView? = weatherOverlayView
 
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
@@ -49,6 +51,7 @@ class OverlayManager(
 
         overlayView = LayoutInflater.from(context).inflate(R.layout.overlay_character, null)
         characterView = overlayView?.findViewById(R.id.character_view)
+        weatherOverlayView = overlayView?.findViewById(R.id.weather_overlay_view)
 
         // Apply opacity
         overlayView?.alpha = settings.overlayOpacity / 100f
@@ -67,6 +70,7 @@ class OverlayManager(
         } catch (_: Exception) {}
         overlayView = null
         characterView = null
+        weatherOverlayView = null
         isShowing = false
     }
 
