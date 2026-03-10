@@ -35,6 +35,9 @@ class CharacterView @JvmOverloads constructor(
 
     private var currentState: CompanionState? = null
 
+    /** Tracks which music track to play next (alternates between "music" and "music2"). */
+    private var useMusicTrack2 = false
+
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
 
@@ -77,7 +80,12 @@ class CharacterView @JvmOverloads constructor(
     }
 
     private fun playVideo(state: CompanionState) {
-        val resName = state.rawVideoResName ?: return
+        var resName = state.rawVideoResName ?: return
+        val alternatingMusic = state == CompanionState.MUSIC
+        if (alternatingMusic) {
+            resName = if (useMusicTrack2) "music2" else "music"
+            useMusicTrack2 = !useMusicTrack2
+        }
         val resId = context.resources.getIdentifier(resName, "raw", context.packageName)
         if (resId == 0) { setFallbackAnimation(state); return }
 
@@ -87,13 +95,25 @@ class CharacterView @JvmOverloads constructor(
         imageView.visibility = View.VISIBLE
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
-            repeatCount = if (state.isLooping) AnimatedImageDrawable.REPEAT_INFINITE else 0
-            if (!state.isLooping) {
+            if (alternatingMusic) {
+                // Play once, then switch to the other track
+                repeatCount = 0
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
-                        oneShotAnimationEndListener?.invoke(state)
+                        if (currentState == CompanionState.MUSIC) {
+                            post { playVideo(state) }
+                        }
                     }
                 })
+            } else {
+                repeatCount = if (state.isLooping) AnimatedImageDrawable.REPEAT_INFINITE else 0
+                if (!state.isLooping) {
+                    registerAnimationCallback(object : Animatable2.AnimationCallback() {
+                        override fun onAnimationEnd(d: Drawable?) {
+                            oneShotAnimationEndListener?.invoke(state)
+                        }
+                    })
+                }
             }
             start()
         }
