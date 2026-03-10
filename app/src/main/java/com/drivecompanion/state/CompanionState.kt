@@ -10,7 +10,8 @@ enum class CompanionState(
     val rawVideoResName: String? = null
 ) {
     CALM("", true, "idle_small"),
-    BLINK("", false, "blink");
+    BLINK("", false, "blink"),
+    MUSIC("", true, "music");
 }
 
 /**

@@ -59,7 +59,23 @@ class StateMachine(private val settings: SettingsRepository) {
     // Auto profile updates
     fun updateDrivingData(data: DrivingData) {}
 
-    fun updateMediaData(data: MediaData) {}
+    fun updateMediaData(data: MediaData) {
+        if (!settings.musicReactionEnabled) {
+            if (currentState == CompanionState.MUSIC) {
+                transitionTo(CompanionState.CALM)
+            }
+            return
+        }
+
+        if (data.isPlaying && currentState != CompanionState.MUSIC) {
+            // MUSIC has priority over CALM/BLINK only; don't override future driving emotions
+            if (currentState == CompanionState.CALM || currentState == CompanionState.BLINK) {
+                transitionTo(CompanionState.MUSIC)
+            }
+        } else if (!data.isPlaying && currentState == CompanionState.MUSIC) {
+            transitionTo(CompanionState.CALM)
+        }
+    }
 
     // Daily profile updates
     fun updateBatteryData(data: BatteryData) {}
