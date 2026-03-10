@@ -4,8 +4,13 @@ package com.drivecompanion.state
  * All possible states of the companion character.
  * States are used across both Auto and Daily profiles.
  */
-enum class CompanionState(val animationAsset: String, val isLooping: Boolean) {
+enum class CompanionState(
+    val animationAsset: String,
+    val isLooping: Boolean,
+    val rawVideoResName: String? = null
+) {
     // Shared states
+    CALM("", true, "idle_small"),
     IDLE("idle_bored.json", true),
     IDLE_SLEEP("idle_sleep.json", true),
     DANCING("dance_generic.json", true),

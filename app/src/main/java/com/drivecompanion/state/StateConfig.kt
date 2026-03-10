@@ -12,6 +12,7 @@ interface StateConfig {
 
 class DriveStateConfig : StateConfig {
     override fun getAvailableStates(): Set<CompanionState> = setOf(
+        CompanionState.CALM,
         CompanionState.IDLE,
         CompanionState.IDLE_SLEEP,
         CompanionState.WALKING,
@@ -23,12 +24,13 @@ class DriveStateConfig : StateConfig {
         CompanionState.TURNING
     )
 
-    override fun getIdleState(): CompanionState = CompanionState.IDLE
+    override fun getIdleState(): CompanionState = CompanionState.CALM
     override fun getSleepState(): CompanionState = CompanionState.IDLE_SLEEP
 }
 
 class DailyStateConfig : StateConfig {
     override fun getAvailableStates(): Set<CompanionState> = setOf(
+        CompanionState.CALM,
         CompanionState.IDLE,
         CompanionState.IDLE_SLEEP,
         CompanionState.DANCING,
@@ -45,6 +47,6 @@ class DailyStateConfig : StateConfig {
         CompanionState.APP_WATCH
     )
 
-    override fun getIdleState(): CompanionState = CompanionState.IDLE
+    override fun getIdleState(): CompanionState = CompanionState.CALM
     override fun getSleepState(): CompanionState = CompanionState.IDLE_SLEEP
 }

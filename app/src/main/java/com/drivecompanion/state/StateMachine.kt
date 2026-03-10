@@ -31,7 +31,7 @@ class StateMachine(private val settings: SettingsRepository) {
     }
 
     private var listener: Listener? = null
-    private var currentState: CompanionState = CompanionState.IDLE
+    private var currentState: CompanionState = CompanionState.CALM
     private var currentProfile: AppProfile = AppProfile.DAILY
     private var currentWeatherModifier: WeatherModifier = WeatherModifier.NONE
 
@@ -64,7 +64,7 @@ class StateMachine(private val settings: SettingsRepository) {
 
     fun setProfile(profile: AppProfile) {
         currentProfile = profile
-        currentState = CompanionState.IDLE
+        currentState = CompanionState.CALM
         idleStartTime = 0L
         evaluateState()
     }
@@ -240,13 +240,16 @@ class StateMachine(private val settings: SettingsRepository) {
 
     private fun resolveIdleState(): CompanionState {
         val now = System.currentTimeMillis()
-        if (currentState != CompanionState.IDLE && currentState != CompanionState.IDLE_SLEEP) {
+        if (currentState != CompanionState.CALM &&
+            currentState != CompanionState.IDLE &&
+            currentState != CompanionState.IDLE_SLEEP
+        ) {
             idleStartTime = now
         }
         return if (now - idleStartTime > sleepThresholdMs) {
             CompanionState.IDLE_SLEEP
         } else {
-            CompanionState.IDLE
+            CompanionState.CALM
         }
     }
 }
