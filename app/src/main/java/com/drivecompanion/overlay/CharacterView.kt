@@ -1,23 +1,19 @@
 package com.drivecompanion.overlay
 
 import android.content.Context
-import android.media.MediaPlayer
-import android.net.Uri
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
 import android.util.AttributeSet
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
 import com.drivecompanion.state.CompanionState
-import android.graphics.SurfaceTexture
-import android.view.Surface
-import android.view.TextureView
 
 /**
  * Custom view that displays the animated companion character using Lottie
- * or video playback (for webm states like CALM).
+ * or AnimatedImageDrawable (for animated WebP states like CALM).
  * Manages animation transitions between states.
  */
 class CharacterView @JvmOverloads constructor(
@@ -30,40 +26,17 @@ class CharacterView @JvmOverloads constructor(
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
     }
 
-    // TextureView вместо SurfaceView — поддерживает прозрачность
-    private val videoTexture: TextureView = TextureView(context).apply {
+    private val imageView: ImageView = ImageView(context).apply {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         visibility = View.GONE
-        isOpaque = false // Ключевая строка — прозрачный фон
     }
 
-    private var mediaPlayer: MediaPlayer? = null
     private var currentState: CompanionState? = null
-    private var surfaceReady = false
-    private var pendingVideoState: CompanionState? = null
 
     init {
         setBackgroundColor(0x00000000)
         addView(lottieView)
-        addView(videoTexture)
-
-        videoTexture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, w: Int, h: Int) {
-                surfaceReady = true
-                pendingVideoState?.let { playVideo(it) }
-                pendingVideoState = null
-            }
-
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, w: Int, h: Int) {}
-
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                surfaceReady = false
-                releaseMediaPlayer()
-                return true
-            }
-
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-        }
+        addView(imageView)
     }
 
     fun setState(state: CompanionState) {
@@ -78,8 +51,8 @@ class CharacterView @JvmOverloads constructor(
     }
 
     private fun showLottie(state: CompanionState) {
-        releaseMediaPlayer()
-        videoTexture.visibility = View.GONE
+        stopAnimatedDrawable()
+        imageView.visibility = View.GONE
         lottieView.visibility = View.VISIBLE
 
         lottieView.cancelAnimation()
@@ -95,42 +68,28 @@ class CharacterView @JvmOverloads constructor(
     private fun showVideo(state: CompanionState) {
         lottieView.cancelAnimation()
         lottieView.visibility = View.GONE
-        videoTexture.visibility = View.VISIBLE
-
-        if (surfaceReady) {
-            playVideo(state)
-        } else {
-            pendingVideoState = state
-        }
+        playVideo(state)
     }
 
     private fun playVideo(state: CompanionState) {
-        releaseMediaPlayer()
-
         val resName = state.rawVideoResName ?: return
         val resId = context.resources.getIdentifier(resName, "raw", context.packageName)
-        if (resId == 0) {
-            setFallbackAnimation(state)
-            return
-        }
+        if (resId == 0) { setFallbackAnimation(state); return }
 
-        val uri = Uri.parse("android.resource://${context.packageName}/$resId")
-        mediaPlayer = MediaPlayer().apply {
-            // TextureView использует Surface, создаём из SurfaceTexture
-            setSurface(Surface(videoTexture.surfaceTexture))
-            setDataSource(context, uri)
-            isLooping = state.isLooping
-            setOnPreparedListener { mp -> mp.start() }
-            prepareAsync()
+        val source = ImageDecoder.createSource(context.resources, resId)
+        val drawable = ImageDecoder.decodeDrawable(source)
+
+        imageView.visibility = View.VISIBLE
+        imageView.setImageDrawable(drawable)
+        (drawable as? AnimatedImageDrawable)?.apply {
+            repeatCount = if (state.isLooping) AnimatedImageDrawable.REPEAT_INFINITE else 0
+            start()
         }
     }
 
-    private fun releaseMediaPlayer() {
-        mediaPlayer?.run {
-            if (isPlaying) stop()
-            release()
-        }
-        mediaPlayer = null
+    private fun stopAnimatedDrawable() {
+        (imageView.drawable as? AnimatedImageDrawable)?.stop()
+        imageView.setImageDrawable(null)
     }
 
     private fun setFallbackAnimation(state: CompanionState) {
@@ -139,7 +98,7 @@ class CharacterView @JvmOverloads constructor(
 
     fun pauseAnimation() {
         if (currentState?.rawVideoResName != null) {
-            mediaPlayer?.takeIf { it.isPlaying }?.pause()
+            (imageView.drawable as? AnimatedImageDrawable)?.stop()
         } else {
             lottieView.pauseAnimation()
         }
@@ -147,7 +106,7 @@ class CharacterView @JvmOverloads constructor(
 
     fun resumeAnimation() {
         if (currentState?.rawVideoResName != null) {
-            mediaPlayer?.takeIf { !it.isPlaying }?.start()
+            (imageView.drawable as? AnimatedImageDrawable)?.start()
         } else {
             if (!lottieView.isAnimating) lottieView.resumeAnimation()
         }
