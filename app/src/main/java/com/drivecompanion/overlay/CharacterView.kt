@@ -38,6 +38,9 @@ class CharacterView @JvmOverloads constructor(
     /** Tracks which music track to play next (alternates between "music" and "music2"). */
     private var useMusicTrack2 = false
 
+    /** Tracks which idle animation to play next (alternates between "idle_small" and "idle2"). */
+    private var useIdleTrack2 = false
+
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
 
@@ -82,9 +85,13 @@ class CharacterView @JvmOverloads constructor(
     private fun playVideo(state: CompanionState) {
         var resName = state.rawVideoResName ?: return
         val alternatingMusic = state == CompanionState.MUSIC
+        val alternatingIdle = state == CompanionState.CALM
         if (alternatingMusic) {
             resName = if (useMusicTrack2) "music2" else "music"
             useMusicTrack2 = !useMusicTrack2
+        } else if (alternatingIdle) {
+            resName = if (useIdleTrack2) "idle2" else "idle_small"
+            useIdleTrack2 = !useIdleTrack2
         }
         val resId = context.resources.getIdentifier(resName, "raw", context.packageName)
         if (resId == 0) { setFallbackAnimation(state); return }
@@ -95,12 +102,13 @@ class CharacterView @JvmOverloads constructor(
         imageView.visibility = View.VISIBLE
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
-            if (alternatingMusic) {
+            if (alternatingMusic || alternatingIdle) {
                 // Play once, then switch to the other track
                 repeatCount = 0
+                val expectedState = state
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
-                        if (currentState == CompanionState.MUSIC) {
+                        if (currentState == expectedState) {
                             post { playVideo(state) }
                         }
                     }
