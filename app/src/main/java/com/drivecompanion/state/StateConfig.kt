@@ -12,41 +12,18 @@ interface StateConfig {
 
 class DriveStateConfig : StateConfig {
     override fun getAvailableStates(): Set<CompanionState> = setOf(
-        CompanionState.CALM,
-        CompanionState.IDLE,
-        CompanionState.IDLE_SLEEP,
-        CompanionState.WALKING,
-        CompanionState.CRUISING,
-        CompanionState.SPEED,
-        CompanionState.TURBO,
-        CompanionState.DANCING,
-        CompanionState.BRAKING,
-        CompanionState.TURNING
+        CompanionState.CALM
     )
 
     override fun getIdleState(): CompanionState = CompanionState.CALM
-    override fun getSleepState(): CompanionState = CompanionState.IDLE_SLEEP
+    override fun getSleepState(): CompanionState = CompanionState.CALM
 }
 
 class DailyStateConfig : StateConfig {
     override fun getAvailableStates(): Set<CompanionState> = setOf(
-        CompanionState.CALM,
-        CompanionState.IDLE,
-        CompanionState.IDLE_SLEEP,
-        CompanionState.DANCING,
-        CompanionState.MORNING,
-        CompanionState.DAILY_WALKING,
-        CompanionState.RUNNING,
-        CompanionState.STEP_GOAL,
-        CompanionState.CHARGING,
-        CompanionState.LOW_BATTERY,
-        CompanionState.NIGHT,
-        CompanionState.PHONING,
-        CompanionState.SCREEN_OFF,
-        CompanionState.SCREEN_ON_HAPPY,
-        CompanionState.APP_WATCH
+        CompanionState.CALM
     )
 
     override fun getIdleState(): CompanionState = CompanionState.CALM
-    override fun getSleepState(): CompanionState = CompanionState.IDLE_SLEEP
+    override fun getSleepState(): CompanionState = CompanionState.CALM
 }
