@@ -9,7 +9,8 @@ enum class CompanionState(
     val isLooping: Boolean,
     val rawVideoResName: String? = null
 ) {
-    CALM("", true, "idle_small");
+    CALM("", true, "idle_small"),
+    BLINK("", false, "blink");
 }
 
 /**

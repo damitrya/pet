@@ -172,6 +172,7 @@ class CompanionService : Service(),
     }
 
     override fun onDestroy() {
+        stateMachine.destroy()
         stopProviders()
         overlayManager.hide()
         settings.serviceEnabled = false
@@ -322,7 +323,12 @@ class CompanionService : Service(),
     }
 
     private fun setInitialState() {
-        overlayManager.getCharacterView()?.setState(CompanionState.CALM)
+        overlayManager.getCharacterView()?.let { cv ->
+            cv.oneShotAnimationEndListener = { state ->
+                if (state == CompanionState.BLINK) stateMachine.onBlinkCompleted()
+            }
+            cv.setState(CompanionState.CALM)
+        }
         stateMachine.setProfile(profileManager.getCurrentProfile())
     }
 

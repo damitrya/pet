@@ -2,7 +2,9 @@ package com.drivecompanion.overlay
 
 import android.content.Context
 import android.graphics.ImageDecoder
+import android.graphics.drawable.Animatable2
 import android.graphics.drawable.AnimatedImageDrawable
+import android.graphics.drawable.Drawable
 import android.util.AttributeSet
 import android.view.View
 import android.widget.FrameLayout
@@ -32,6 +34,9 @@ class CharacterView @JvmOverloads constructor(
     }
 
     private var currentState: CompanionState? = null
+
+    /** Called when a non-looping animation finishes playing. */
+    var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
 
     init {
         setBackgroundColor(0x00000000)
@@ -83,6 +88,13 @@ class CharacterView @JvmOverloads constructor(
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
             repeatCount = if (state.isLooping) AnimatedImageDrawable.REPEAT_INFINITE else 0
+            if (!state.isLooping) {
+                registerAnimationCallback(object : Animatable2.AnimationCallback() {
+                    override fun onAnimationEnd(d: Drawable?) {
+                        oneShotAnimationEndListener?.invoke(state)
+                    }
+                })
+            }
             start()
         }
     }

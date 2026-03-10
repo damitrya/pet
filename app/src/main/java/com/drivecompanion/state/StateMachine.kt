@@ -13,10 +13,11 @@ import com.drivecompanion.data.SettingsRepository
 import com.drivecompanion.data.StepData
 import com.drivecompanion.data.TimeData
 import com.drivecompanion.data.WeatherData
+import kotlin.random.Random
 
 /**
  * Finite state machine that determines the companion's current state.
- * Currently only supports the CALM state.
+ * Manages automatic BLINK transitions while in CALM state.
  */
 class StateMachine(private val settings: SettingsRepository) {
 
@@ -29,6 +30,9 @@ class StateMachine(private val settings: SettingsRepository) {
     private var currentState: CompanionState = CompanionState.CALM
     private var currentWeatherModifier: WeatherModifier = WeatherModifier.NONE
 
+    private val handler = Handler(Looper.getMainLooper())
+    private val blinkRunnable = Runnable { triggerBlink() }
+
     fun setListener(listener: Listener?) {
         this.listener = listener
     }
@@ -36,7 +40,20 @@ class StateMachine(private val settings: SettingsRepository) {
     fun getCurrentState(): CompanionState = currentState
 
     fun setProfile(profile: AppProfile) {
-        currentState = CompanionState.CALM
+        transitionTo(CompanionState.CALM)
+    }
+
+    /**
+     * Called by CharacterView (via CompanionService) when the BLINK animation finishes.
+     * Transitions back to CALM and schedules the next blink.
+     */
+    fun onBlinkCompleted() {
+        if (currentState != CompanionState.BLINK) return
+        transitionTo(CompanionState.CALM)
+    }
+
+    fun destroy() {
+        cancelBlinkTimer()
     }
 
     // Auto profile updates
@@ -64,4 +81,32 @@ class StateMachine(private val settings: SettingsRepository) {
     fun updateAppUsageData(data: AppUsageData) {}
 
     fun updatePhoneCallData(data: PhoneCallData) {}
+
+    private fun transitionTo(newState: CompanionState) {
+        val previous = currentState
+        currentState = newState
+        listener?.onStateChanged(newState, previous)
+
+        if (newState == CompanionState.CALM) {
+            scheduleNextBlink()
+        } else if (newState != CompanionState.BLINK) {
+            // Entering a non-blink emotion — stop the blink cycle
+            cancelBlinkTimer()
+        }
+    }
+
+    private fun triggerBlink() {
+        if (currentState != CompanionState.CALM) return
+        transitionTo(CompanionState.BLINK)
+    }
+
+    private fun scheduleNextBlink() {
+        cancelBlinkTimer()
+        val delayMs = 3000L + Random.nextLong(4001L) // 3000..7000 ms
+        handler.postDelayed(blinkRunnable, delayMs)
+    }
+
+    private fun cancelBlinkTimer() {
+        handler.removeCallbacks(blinkRunnable)
+    }
 }
