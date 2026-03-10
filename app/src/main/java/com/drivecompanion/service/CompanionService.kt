@@ -299,7 +299,7 @@ class CompanionService : Service(),
         }
 
         // Reset overlay state
-        overlayManager.getCharacterView()?.setState(CompanionState.IDLE)
+        overlayManager.getCharacterView()?.setState(CompanionState.CALM)
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(WeatherModifier.NONE)
     }
 
@@ -322,7 +322,7 @@ class CompanionService : Service(),
     }
 
     private fun setInitialState() {
-        overlayManager.getCharacterView()?.setState(CompanionState.IDLE)
+        overlayManager.getCharacterView()?.setState(CompanionState.CALM)
         stateMachine.setProfile(profileManager.getCurrentProfile())
     }
 
