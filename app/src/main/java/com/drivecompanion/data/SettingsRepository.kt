@@ -46,6 +46,10 @@ class SettingsRepository(context: Context) {
         const val KEY_EVENING_START = "evening_start"
         const val KEY_NIGHT_START = "night_start"
 
+        // Alert braking detection
+        const val KEY_ALERT_BRAKING_THRESHOLD = "alert_braking_threshold"
+        const val DEFAULT_ALERT_BRAKING_THRESHOLD = -4.0f
+
         // Defaults
         const val DEFAULT_SIZE = 150
         const val DEFAULT_OPACITY = 100
@@ -147,6 +151,11 @@ class SettingsRepository(context: Context) {
     var lowBatteryThreshold: Int
         get() = prefs.getInt(KEY_LOW_BATTERY_THRESHOLD, DEFAULT_LOW_BATTERY_THRESHOLD)
         set(value) = prefs.edit().putInt(KEY_LOW_BATTERY_THRESHOLD, value).apply()
+
+    /** Acceleration threshold (m/s²) on axis X below which ALERT is triggered. Negative value. */
+    var alertBrakingThreshold: Float
+        get() = prefs.getFloat(KEY_ALERT_BRAKING_THRESHOLD, DEFAULT_ALERT_BRAKING_THRESHOLD)
+        set(value) = prefs.edit().putFloat(KEY_ALERT_BRAKING_THRESHOLD, value).apply()
 
     // Time ranges (hours)
     var morningStart: Int

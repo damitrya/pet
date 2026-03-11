@@ -14,7 +14,13 @@ enum class CompanionState(
     MUSIC("", true, "music"),
 
     /** One-shot tap reaction. Returns to the previous looping state (CALM or MUSIC) when done. */
-    TAP("", false, "tap");
+    TAP("", false, "tap"),
+
+    /**
+     * One-shot high-priority alert triggered by sharp braking.
+     * Immediately interrupts any current state and returns to the previous looping state when done.
+     */
+    ALERT("", false, "alert");
 }
 
 /**
