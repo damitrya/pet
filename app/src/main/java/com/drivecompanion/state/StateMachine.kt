@@ -32,7 +32,7 @@ class StateMachine(private val settings: SettingsRepository) {
 
     /**
      * The last looping (ambient) state: either CALM or MUSIC.
-     * TAP returns here when its one-shot animation finishes.
+     * TAP and ALERT return here when their one-shot animation finishes.
      */
     private var baseLoopingState: CompanionState = CompanionState.CALM
 
@@ -41,6 +41,12 @@ class StateMachine(private val settings: SettingsRepository) {
      * Ignored if already set — duplicate taps during queue are discarded.
      */
     private var tapQueued: Boolean = false
+
+    /** True while the ALERT one-shot animation is playing. Prevents re-triggering. */
+    private var alertActive: Boolean = false
+
+    /** System time (ms) before which a new ALERT cannot be triggered (3-second cooldown). */
+    private var alertCooldownUntil: Long = 0L
 
     private val handler = Handler(Looper.getMainLooper())
     private val blinkRunnable = Runnable { triggerBlink() }
@@ -79,22 +85,59 @@ class StateMachine(private val settings: SettingsRepository) {
     }
 
     /**
+     * Called by CharacterView (via CompanionService) when the ALERT animation finishes.
+     * Clears alert active flag, starts cooldown, and returns to the saved looping state.
+     */
+    fun onAlertCompleted() {
+        if (currentState != CompanionState.ALERT) return
+        alertActive = false
+        alertCooldownUntil = System.currentTimeMillis() + ALERT_COOLDOWN_MS
+        transitionTo(baseLoopingState)
+    }
+
+    /**
+     * Triggered by [AccelerometerMonitor] when sharp braking is detected.
+     *
+     * - Ignored if ALERT is already playing.
+     * - Ignored if within the 3-second cooldown window after a previous ALERT.
+     * - Immediately interrupts any current state (CALM, BLINK, TAP, MUSIC).
+     * - Resets blink timer and clears the tap queue.
+     */
+    fun onAlertTriggered() {
+        if (alertActive) return
+        if (System.currentTimeMillis() < alertCooldownUntil) return
+
+        alertActive = true
+        tapQueued = false
+        cancelBlinkTimer()
+
+        // Save the looping base state before interrupting it.
+        // If we're currently in a one-shot (BLINK/TAP), baseLoopingState already holds the right target.
+        // If we're in a looping state, update it now.
+        if (currentState.isLooping) {
+            baseLoopingState = currentState
+        }
+
+        transitionTo(CompanionState.ALERT)
+    }
+
+    /**
      * Triggered by a short tap on the character overlay.
      *
      * - If a looping state (CALM, MUSIC) is active → play TAP immediately.
      * - If a one-shot animation is active (BLINK, future MUSIC_DANCE, etc.) → queue TAP.
      * - If TAP is already queued or playing → ignore (no duplicate taps).
-     * - High-priority transitions (ALERT, etc.) will clear [tapQueued] via [transitionTo].
+     * - ALERT is active → ignore (high-priority state blocks taps).
      */
     fun onTap() {
-        if (tapQueued || currentState == CompanionState.TAP) return
+        if (alertActive || tapQueued || currentState == CompanionState.TAP) return
 
         if (currentState.isLooping) {
             // Immediate: remember where to return and play TAP
             baseLoopingState = currentState
             transitionTo(CompanionState.TAP)
         } else {
-            // One-shot in progress (BLINK / future MUSIC_DANCE) — queue for later
+            // One-shot in progress (BLINK) — queue for later
             tapQueued = true
         }
     }
@@ -115,18 +158,21 @@ class StateMachine(private val settings: SettingsRepository) {
         }
 
         if (data.isPlaying && currentState != CompanionState.MUSIC) {
-            // MUSIC has priority over CALM/BLINK only; don't override future driving emotions
+            // MUSIC has priority over CALM/BLINK only; don't override ALERT or TAP mid-play
             if (currentState == CompanionState.CALM || currentState == CompanionState.BLINK) {
                 transitionTo(CompanionState.MUSIC)
-            } else if (currentState == CompanionState.TAP) {
-                // Music started while TAP is playing — update return target so TAP lands in MUSIC
+            } else if (currentState == CompanionState.TAP || currentState == CompanionState.ALERT) {
+                // Music started while one-shot is playing — update return target
                 baseLoopingState = CompanionState.MUSIC
             }
         } else if (!data.isPlaying) {
             if (currentState == CompanionState.MUSIC) {
                 transitionTo(CompanionState.CALM)
-            } else if (currentState == CompanionState.TAP && baseLoopingState == CompanionState.MUSIC) {
-                // Music stopped while TAP is playing — return to CALM instead
+            } else if (
+                (currentState == CompanionState.TAP || currentState == CompanionState.ALERT) &&
+                baseLoopingState == CompanionState.MUSIC
+            ) {
+                // Music stopped while one-shot is playing — return to CALM instead
                 baseLoopingState = CompanionState.CALM
             }
         }
@@ -156,7 +202,7 @@ class StateMachine(private val settings: SettingsRepository) {
     private fun transitionTo(newState: CompanionState) {
         val previous = currentState
 
-        // If a one-shot was cut short by a looping state (not TAP), the queued tap is stale.
+        // If a one-shot was cut short by a looping state (not TAP/ALERT), the queued tap is stale.
         if (!previous.isLooping && newState.isLooping) {
             tapQueued = false
         }
@@ -175,6 +221,9 @@ class StateMachine(private val settings: SettingsRepository) {
             }
             CompanionState.BLINK -> { /* timer already armed; wait for onBlinkCompleted */ }
             CompanionState.TAP -> cancelBlinkTimer()
+            CompanionState.ALERT -> {
+                // Blink timer and tap queue already cleared in onAlertTriggered()
+            }
         }
     }
 
@@ -191,5 +240,9 @@ class StateMachine(private val settings: SettingsRepository) {
 
     private fun cancelBlinkTimer() {
         handler.removeCallbacks(blinkRunnable)
+    }
+
+    companion object {
+        private const val ALERT_COOLDOWN_MS = 3000L
     }
 }

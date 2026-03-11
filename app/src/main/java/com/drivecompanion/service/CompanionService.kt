@@ -17,6 +17,7 @@ import com.drivecompanion.data.AppUsageData
 import com.drivecompanion.data.AppUsageProvider
 import com.drivecompanion.data.BatteryData
 import com.drivecompanion.data.BatteryDataProvider
+import com.drivecompanion.data.AccelerometerMonitor
 import com.drivecompanion.data.BluetoothTrigger
 import com.drivecompanion.data.DrivingData
 import com.drivecompanion.data.MediaData
@@ -41,6 +42,7 @@ import com.drivecompanion.state.WeatherModifier
 import com.drivecompanion.ui.SettingsActivity
 
 class CompanionService : Service(),
+    AccelerometerMonitor.Listener,
     SensorDataProvider.Listener,
     MediaStateProvider.Listener,
     StateMachine.Listener,
@@ -78,6 +80,7 @@ class CompanionService : Service(),
 
     private lateinit var settings: SettingsRepository
     private lateinit var profileManager: ProfileManager
+    private lateinit var accelerometerMonitor: AccelerometerMonitor
     private lateinit var sensorProvider: SensorDataProvider
     private lateinit var mediaProvider: MediaStateProvider
     private lateinit var stateMachine: StateMachine
@@ -98,6 +101,7 @@ class CompanionService : Service(),
 
         settings = SettingsRepository(this)
         profileManager = ProfileManager(this, settings)
+        accelerometerMonitor = AccelerometerMonitor(this)
         sensorProvider = SensorDataProvider(this)
         mediaProvider = MediaStateProvider(this)
         stateMachine = StateMachine(settings)
@@ -114,6 +118,7 @@ class CompanionService : Service(),
         bluetoothTrigger = BluetoothTrigger(this, settings)
 
         // Wire up listeners
+        accelerometerMonitor.setListener(this)
         sensorProvider.setListener(this)
         mediaProvider.setListener(this)
         stateMachine.setListener(this)
@@ -195,6 +200,7 @@ class CompanionService : Service(),
     }
 
     private fun stopProviders() {
+        accelerometerMonitor.stop()
         sensorProvider.stop()
         mediaProvider.stop()
         batteryProvider.stop()
@@ -208,6 +214,8 @@ class CompanionService : Service(),
     }
 
     private fun startAutoProviders() {
+        accelerometerMonitor.setThreshold(settings.alertBrakingThreshold)
+        accelerometerMonitor.start()
         sensorProvider.start()
     }
 
@@ -222,6 +230,7 @@ class CompanionService : Service(),
     }
 
     private fun stopAutoProviders() {
+        accelerometerMonitor.stop()
         sensorProvider.stop()
     }
 
@@ -233,6 +242,11 @@ class CompanionService : Service(),
         weatherProvider.stop()
         appUsageProvider.stop()
         phoneCallProvider.stop()
+    }
+
+    // AccelerometerMonitor.Listener
+    override fun onSharpBraking() {
+        stateMachine.onAlertTriggered()
     }
 
     // SensorDataProvider.Listener
@@ -328,6 +342,7 @@ class CompanionService : Service(),
                 when (state) {
                     CompanionState.BLINK -> stateMachine.onBlinkCompleted()
                     CompanionState.TAP -> stateMachine.onTapCompleted()
+                    CompanionState.ALERT -> stateMachine.onAlertCompleted()
                     else -> {}
                 }
             }
