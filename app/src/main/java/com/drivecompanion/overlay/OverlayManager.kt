@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -23,6 +24,12 @@ class OverlayManager(
     private var weatherOverlayView: WeatherOverlayView? = null
     private var layoutParams: WindowManager.LayoutParams? = null
     private var isShowing = false
+
+    /**
+     * Invoked on a short tap (< [LONG_PRESS_THRESHOLD_MS] ms, no drag).
+     * Wire this up in CompanionService to trigger the TAP animation.
+     */
+    var onTapListener: (() -> Unit)? = null
 
     fun getCharacterView(): CharacterView? = characterView
     fun getWeatherOverlayView(): WeatherOverlayView? = weatherOverlayView
@@ -97,6 +104,7 @@ class OverlayManager(
         var initialTouchX = 0f
         var initialTouchY = 0f
         var isDragging = false
+        var downTime = 0L
 
         overlayView?.setOnTouchListener { _, event ->
             when (event.action) {
@@ -106,6 +114,7 @@ class OverlayManager(
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+                    downTime = SystemClock.uptimeMillis()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -124,16 +133,29 @@ class OverlayManager(
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (isDragging) {
-                        // Save position
-                        settings.overlayX = layoutParams?.x ?: 0
-                        settings.overlayY = layoutParams?.y ?: 0
+                    val pressDurationMs = SystemClock.uptimeMillis() - downTime
+                    when {
+                        isDragging -> {
+                            // Save new position
+                            settings.overlayX = layoutParams?.x ?: 0
+                            settings.overlayY = layoutParams?.y ?: 0
+                        }
+                        pressDurationMs < LONG_PRESS_THRESHOLD_MS -> {
+                            // Short tap → trigger TAP animation
+                            onTapListener?.invoke()
+                        }
+                        // else: long press (≥ 600 ms) — reserved for future PET emotion, ignore
                     }
                     true
                 }
                 else -> false
             }
         }
+    }
+
+    companion object {
+        /** Presses at or above this threshold are reserved for the future PET emotion. */
+        private const val LONG_PRESS_THRESHOLD_MS = 600L
     }
 
     private fun dpToPx(dp: Int): Int {

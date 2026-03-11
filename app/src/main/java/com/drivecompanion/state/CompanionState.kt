@@ -11,7 +11,10 @@ enum class CompanionState(
 ) {
     CALM("", true, "idle_small"),
     BLINK("", false, "blink"),
-    MUSIC("", true, "music");
+    MUSIC("", true, "music"),
+
+    /** One-shot tap reaction. Returns to the previous looping state (CALM or MUSIC) when done. */
+    TAP("", false, "tap");
 }
 
 /**

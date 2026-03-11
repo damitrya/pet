@@ -325,10 +325,15 @@ class CompanionService : Service(),
     private fun setInitialState() {
         overlayManager.getCharacterView()?.let { cv ->
             cv.oneShotAnimationEndListener = { state ->
-                if (state == CompanionState.BLINK) stateMachine.onBlinkCompleted()
+                when (state) {
+                    CompanionState.BLINK -> stateMachine.onBlinkCompleted()
+                    CompanionState.TAP -> stateMachine.onTapCompleted()
+                    else -> {}
+                }
             }
             cv.setState(CompanionState.CALM)
         }
+        overlayManager.onTapListener = { stateMachine.onTap() }
         stateMachine.setProfile(profileManager.getCurrentProfile())
     }
 
