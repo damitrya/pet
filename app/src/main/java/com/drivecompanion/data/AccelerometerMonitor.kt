@@ -9,8 +9,11 @@ import android.os.Handler
 import android.os.Looper
 
 /**
- * Monitors the accelerometer for sharp braking events on axis X.
- * Applies a low-pass filter and detects negative-edge crossings of the configured threshold.
+ * Monitors the accelerometer for sharp braking events on axes X and Y.
+ * Monitoring both horizontal axes ensures detection regardless of how the device is mounted
+ * (portrait, landscape, or rotated).
+ * Applies a low-pass filter per axis and detects negative-edge crossings of the configured
+ * threshold on either axis.
  * Cooldown and playback-guard logic is handled by [com.drivecompanion.state.StateMachine].
  */
 class AccelerometerMonitor(context: Context) : SensorEventListener {
@@ -24,7 +27,9 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     private val handler = Handler(Looper.getMainLooper())
 
     private var filteredX: Float = 0f
-    private var wasBelow: Boolean = false
+    private var filteredY: Float = 0f
+    private var wasBelowX: Boolean = false
+    private var wasBelowY: Boolean = false
     private var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAKING_THRESHOLD
 
     fun setListener(listener: Listener?) {
@@ -37,7 +42,9 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
 
     fun start() {
         filteredX = 0f
-        wasBelow = false
+        filteredY = 0f
+        wasBelowX = false
+        wasBelowY = false
         val accel = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
         accel?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
@@ -52,16 +59,20 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     override fun onSensorChanged(event: SensorEvent) {
         if (event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
 
-        val x = event.values[0]
         // Low-pass filter to remove sensor noise
-        filteredX = filteredX * 0.8f + x * 0.2f
+        filteredX = filteredX * 0.8f + event.values[0] * 0.2f
+        filteredY = filteredY * 0.8f + event.values[1] * 0.2f
 
-        val isBelow = filteredX < threshold
-        if (isBelow && !wasBelow) {
-            // Rising edge: acceleration just crossed below threshold → sharp braking detected
+        val isBelowX = filteredX < threshold
+        val isBelowY = filteredY < threshold
+
+        if ((isBelowX && !wasBelowX) || (isBelowY && !wasBelowY)) {
+            // Either axis just crossed below threshold → sharp braking detected
             handler.post { listener?.onSharpBraking() }
         }
-        wasBelow = isBelow
+
+        wasBelowX = isBelowX
+        wasBelowY = isBelowY
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
