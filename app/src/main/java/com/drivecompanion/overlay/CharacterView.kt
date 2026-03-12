@@ -108,8 +108,8 @@ class CharacterView @JvmOverloads constructor(
                 val expectedState = state
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
-                        if (currentState == expectedState) {
-                            post { playVideo(state) }
+                        post {
+                            if (currentState == expectedState) playVideo(state)
                         }
                     }
                 })
@@ -118,7 +118,7 @@ class CharacterView @JvmOverloads constructor(
                 if (!state.isLooping) {
                     registerAnimationCallback(object : Animatable2.AnimationCallback() {
                         override fun onAnimationEnd(d: Drawable?) {
-                            oneShotAnimationEndListener?.invoke(state)
+                            post { oneShotAnimationEndListener?.invoke(state) }
                         }
                     })
                 }
