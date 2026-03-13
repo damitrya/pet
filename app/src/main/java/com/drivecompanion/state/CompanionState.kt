@@ -20,7 +20,13 @@ enum class CompanionState(
      * One-shot high-priority alert triggered by sharp braking.
      * Immediately interrupts any current state and returns to the previous looping state when done.
      */
-    ALERT("", false, "alert");
+    ALERT("", false, "alert"),
+
+    /**
+     * Looping petting reaction triggered by a long press (≥ 600 ms).
+     * Plays until the finger is released, then returns to the previous looping state (CALM or MUSIC).
+     */
+    PET("", true, "pet");
 }
 
 /**

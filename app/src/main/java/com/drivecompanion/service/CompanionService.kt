@@ -349,6 +349,8 @@ class CompanionService : Service(),
             cv.setState(CompanionState.CALM)
         }
         overlayManager.onTapListener = { stateMachine.onTap() }
+        overlayManager.onLongPressListener = { stateMachine.onLongPress() }
+        overlayManager.onLongPressReleasedListener = { stateMachine.onLongPressReleased() }
         stateMachine.setProfile(profileManager.getCurrentProfile())
     }
 

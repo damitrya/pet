@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
@@ -30,6 +32,18 @@ class OverlayManager(
      * Wire this up in CompanionService to trigger the TAP animation.
      */
     var onTapListener: (() -> Unit)? = null
+
+    /**
+     * Invoked when a long press fires (finger held ≥ [LONG_PRESS_THRESHOLD_MS] ms, no drag).
+     * Wire this up in CompanionService to start the PET animation.
+     */
+    var onLongPressListener: (() -> Unit)? = null
+
+    /**
+     * Invoked when the finger is released after a long press.
+     * Wire this up in CompanionService to end the PET animation.
+     */
+    var onLongPressReleasedListener: (() -> Unit)? = null
 
     fun getCharacterView(): CharacterView? = characterView
     fun getWeatherOverlayView(): WeatherOverlayView? = weatherOverlayView
@@ -104,7 +118,14 @@ class OverlayManager(
         var initialTouchX = 0f
         var initialTouchY = 0f
         var isDragging = false
+        var isLongPressActive = false
         var downTime = 0L
+
+        val longPressHandler = Handler(Looper.getMainLooper())
+        val longPressRunnable = Runnable {
+            isLongPressActive = true
+            onLongPressListener?.invoke()
+        }
 
         overlayView?.setOnTouchListener { _, event ->
             when (event.action) {
@@ -114,7 +135,9 @@ class OverlayManager(
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
                     isDragging = false
+                    isLongPressActive = false
                     downTime = SystemClock.uptimeMillis()
+                    longPressHandler.postDelayed(longPressRunnable, LONG_PRESS_THRESHOLD_MS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -122,6 +145,7 @@ class OverlayManager(
                     val dy = event.rawY - initialTouchY
                     if (!isDragging && (dx * dx + dy * dy > 25)) {
                         isDragging = true
+                        longPressHandler.removeCallbacks(longPressRunnable)
                     }
                     if (isDragging) {
                         layoutParams?.x = initialX + dx.toInt()
@@ -133,18 +157,22 @@ class OverlayManager(
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val pressDurationMs = SystemClock.uptimeMillis() - downTime
+                    longPressHandler.removeCallbacks(longPressRunnable)
                     when {
                         isDragging -> {
                             // Save new position
                             settings.overlayX = layoutParams?.x ?: 0
                             settings.overlayY = layoutParams?.y ?: 0
                         }
-                        pressDurationMs < LONG_PRESS_THRESHOLD_MS -> {
+                        isLongPressActive -> {
+                            // Finger released after long press — end PET animation
+                            isLongPressActive = false
+                            onLongPressReleasedListener?.invoke()
+                        }
+                        else -> {
                             // Short tap → trigger TAP animation
                             onTapListener?.invoke()
                         }
-                        // else: long press (≥ 600 ms) — reserved for future PET emotion, ignore
                     }
                     true
                 }
@@ -154,7 +182,7 @@ class OverlayManager(
     }
 
     companion object {
-        /** Presses at or above this threshold are reserved for the future PET emotion. */
+        /** Presses held at least this long trigger the PET emotion. */
         private const val LONG_PRESS_THRESHOLD_MS = 600L
     }
 

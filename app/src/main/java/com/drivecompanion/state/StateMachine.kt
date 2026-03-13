@@ -45,6 +45,9 @@ class StateMachine(private val settings: SettingsRepository) {
     /** True while the ALERT one-shot animation is playing. Prevents re-triggering. */
     private var alertActive: Boolean = false
 
+    /** True while PET animation is playing (finger held down). Prevents re-triggering. */
+    private var petActive: Boolean = false
+
     /** System time (ms) before which a new ALERT cannot be triggered (3-second cooldown). */
     private var alertCooldownUntil: Long = 0L
 
@@ -108,17 +111,53 @@ class StateMachine(private val settings: SettingsRepository) {
         if (System.currentTimeMillis() < alertCooldownUntil) return
 
         alertActive = true
+        petActive = false
         tapQueued = false
         cancelBlinkTimer()
 
         // Save the looping base state before interrupting it.
-        // If we're currently in a one-shot (BLINK/TAP), baseLoopingState already holds the right target.
-        // If we're in a looping state, update it now.
-        if (currentState.isLooping) {
+        // Only update for true ambient states (CALM/MUSIC); for one-shots (BLINK/TAP) and PET,
+        // baseLoopingState already holds the correct CALM/MUSIC target.
+        if (currentState == CompanionState.CALM || currentState == CompanionState.MUSIC) {
             baseLoopingState = currentState
         }
 
         transitionTo(CompanionState.ALERT)
+    }
+
+    /**
+     * Triggered by a long press (≥ 600 ms) on the character overlay.
+     *
+     * - Ignored if ALERT is active (high-priority state).
+     * - Ignored if PET is already active (no repeated triggers while held).
+     * - Interrupts any current state, pauses BLINK timer, clears TAP queue.
+     * - Looping base state is preserved so [onLongPressReleased] can return correctly.
+     */
+    fun onLongPress() {
+        if (alertActive) return
+        if (petActive) return
+
+        petActive = true
+        tapQueued = false
+        cancelBlinkTimer()
+
+        // Preserve the looping base state only if it is genuinely a base looping state.
+        // If a one-shot (BLINK/TAP) is active, baseLoopingState already holds the right value.
+        if (currentState == CompanionState.CALM || currentState == CompanionState.MUSIC) {
+            baseLoopingState = currentState
+        }
+
+        transitionTo(CompanionState.PET)
+    }
+
+    /**
+     * Triggered when the finger is released after a long press.
+     * Returns to the saved looping state (CALM or MUSIC).
+     */
+    fun onLongPressReleased() {
+        if (currentState != CompanionState.PET) return
+        petActive = false
+        transitionTo(baseLoopingState)
     }
 
     /**
@@ -127,10 +166,10 @@ class StateMachine(private val settings: SettingsRepository) {
      * - If a looping state (CALM, MUSIC) is active → play TAP immediately.
      * - If a one-shot animation is active (BLINK, future MUSIC_DANCE, etc.) → queue TAP.
      * - If TAP is already queued or playing → ignore (no duplicate taps).
-     * - ALERT is active → ignore (high-priority state blocks taps).
+     * - ALERT or PET is active → ignore (high-priority states block taps).
      */
     fun onTap() {
-        if (alertActive || tapQueued || currentState == CompanionState.TAP) return
+        if (alertActive || tapQueued || currentState == CompanionState.TAP || currentState == CompanionState.PET) return
 
         if (currentState.isLooping) {
             // Immediate: remember where to return and play TAP
@@ -158,21 +197,21 @@ class StateMachine(private val settings: SettingsRepository) {
         }
 
         if (data.isPlaying && currentState != CompanionState.MUSIC) {
-            // MUSIC has priority over CALM/BLINK only; don't override ALERT or TAP mid-play
+            // MUSIC has priority over CALM/BLINK only; don't override ALERT, TAP, or PET mid-play
             if (currentState == CompanionState.CALM || currentState == CompanionState.BLINK) {
                 transitionTo(CompanionState.MUSIC)
-            } else if (currentState == CompanionState.TAP || currentState == CompanionState.ALERT) {
-                // Music started while one-shot is playing — update return target
+            } else if (currentState == CompanionState.TAP || currentState == CompanionState.ALERT || currentState == CompanionState.PET) {
+                // Music started while one-shot/pet is playing — update return target
                 baseLoopingState = CompanionState.MUSIC
             }
         } else if (!data.isPlaying) {
             if (currentState == CompanionState.MUSIC) {
                 transitionTo(CompanionState.CALM)
             } else if (
-                (currentState == CompanionState.TAP || currentState == CompanionState.ALERT) &&
+                (currentState == CompanionState.TAP || currentState == CompanionState.ALERT || currentState == CompanionState.PET) &&
                 baseLoopingState == CompanionState.MUSIC
             ) {
-                // Music stopped while one-shot is playing — return to CALM instead
+                // Music stopped while one-shot/pet is playing — return to CALM instead
                 baseLoopingState = CompanionState.CALM
             }
         }
@@ -221,8 +260,9 @@ class StateMachine(private val settings: SettingsRepository) {
             }
             CompanionState.BLINK -> { /* timer already armed; wait for onBlinkCompleted */ }
             CompanionState.TAP -> cancelBlinkTimer()
+            CompanionState.PET -> { /* blink timer and tap queue already cleared in onLongPress() */ }
             CompanionState.ALERT -> {
-                // Blink timer and tap queue already cleared in onAlertTriggered()
+                // Blink timer, tap queue and petActive already cleared in onAlertTriggered()
             }
         }
     }
