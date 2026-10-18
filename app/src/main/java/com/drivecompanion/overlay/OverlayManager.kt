@@ -176,6 +176,20 @@ class OverlayManager(
                     }
                     true
                 }
+                MotionEvent.ACTION_CANCEL -> {
+                    // Gesture interrupted by the system: never fire a tap, but always end PET.
+                    longPressHandler.removeCallbacks(longPressRunnable)
+                    if (isDragging) {
+                        settings.overlayX = layoutParams?.x ?: 0
+                        settings.overlayY = layoutParams?.y ?: 0
+                    }
+                    if (isLongPressActive) {
+                        isLongPressActive = false
+                        onLongPressReleasedListener?.invoke()
+                    }
+                    isDragging = false
+                    true
+                }
                 else -> false
             }
         }
