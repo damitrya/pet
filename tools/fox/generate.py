@@ -247,6 +247,7 @@ def default_pose():
 GROUND = (64, 122)
 # Shrinks the whole character a little so ears (jumps) and tail (sway) stay inside the frame.
 FIT = Tf.scale(0.9, 0.9, 62, 124)
+TAIL_MAX_RIGHT = 6.0
 NECK = (64, 92)
 
 
@@ -267,7 +268,11 @@ def draw_character(pose):
     base = (84, 108)
     curl = pose["tail_curl"]
     centre = bezier(base, (120, 100), (110 - 6 * curl, 56 + 4 * curl), n=30)
-    tail_tf = body_tf @ Tf.rotate(pose["tail"], *base)
+    # Swinging right (positive) pushes the tail toward the frame edge — soft-cap it.
+    tail_angle = pose["tail"]
+    if tail_angle > 0:
+        tail_angle = TAIL_MAX_RIGHT * math.tanh(tail_angle / TAIL_MAX_RIGHT)
+    tail_tf = body_tf @ Tf.rotate(tail_angle, *base)
     tail_mask = Canvas.new_mask()
     tip_mask = Canvas.new_mask()
     for i, (x, y) in enumerate(centre):
@@ -556,7 +561,7 @@ def tap(i, n):
     jump = bump(t, 0.12, 0.5)
     land = bump(t, 0.46, 0.64)
     p["sy"] = 1 - 0.16 * squash + 0.07 * jump - 0.10 * land
-    p["sx"] = 1 + 0.12 * squash - 0.04 * jump + 0.08 * land
+    p["sx"] = 1 + 0.06 * squash - 0.03 * jump + 0.04 * land
     p["dy"] = -6 * math.sin(math.pi * clamp((t - 0.14) / 0.36)) if 0.14 < t < 0.5 else 0
     p["ear_out"] = -8 * jump + 10 * land
     p["tail"] = 20 * math.sin(2 * math.pi * t * 2.5) * (1 - ramp(t, 0.7, 1.0))
