@@ -32,6 +32,21 @@ python3 tools/fox/generate.py --preview /tmp/out  # плюс fox_preview.png / f
 | `fox_fall_asleep` | FALL_ASLEEP | клюёт носом и засыпает                         |
 | `fox_sleep`       | SLEEP     | спит, «Z-z-z» (цикл)                             |
 | `fox_wake`        | WAKE      | просыпается и потягивается                       |
+| `fox_tail_wag`    | CALM      | радостно виляет хвостом                          |
+| `fox_stretch`     | CALM, STRETCH | потягивается, раскинув лапы                  |
+| `fox_shake`       | CALM      | встряхивается, разлетаются капли                 |
+| `fox_tail_play`   | CALM      | редкая: ловит свой хвост                         |
+| `fox_surprise`    | CALM      | удивление: круглые глаза, уши торчком            |
+| `fox_bounce`      | BOUNCE    | двойной тап: три прыжка, искорки                 |
+| `fox_laugh`       | TAP       | смеётся, держась за живот                        |
+| `fox_shy`         | SHY       | закрывает мордочку лапами и подглядывает         |
+| `fox_music_spin`  | MUSIC     | редкая: прыжок с оборотом                        |
+| `fox_music_paws`  | MUSIC     | танцует лапами по очереди                        |
+| `fox_drowsy`      | DROWSY    | клюёт носом, вздрагивает, зевает                 |
+| `fox_turn_left`   | TURN_LEFT | резкий поворот влево: отбрасывает вправо         |
+| `fox_turn_right`  | TURN_RIGHT| резкий поворот вправо: отбрасывает влево         |
+| `fox_phone_call`  | PHONE_CALL| говорит по телефону (цикл)                       |
+| `fox_low_battery` | LOW_BATTERY | мигающая разряженная батарейка, капля пота     |
 
 Какие файлы играет каждое состояние и с какой вероятностью, задаётся пулами в
 `app/src/main/java/com/drivecompanion/state/AnimationPool.kt` (`AnimationPools`).
@@ -41,8 +56,9 @@ python3 tools/fox/generate.py --preview /tmp/out  # плюс fox_preview.png / f
 - палитра — константы в начале файла (`ORANGE_TOP`, `CREAM`, …);
 - форма персонажа — `draw_character()`, глаза/рот — `draw_eyes()` / `draw_mouth()`;
 - анимация эмоции — одноимённая функция позы (`tap()`, `pet()`, …), длина — словарь `EMOTIONS`;
-- поднятая лапа — поле позы `arm` (`draw_arm()`), наклейки — `extras` (`draw_extra()`: note, heart,
-  sparkle, bang, sweat, shock, zzz, question, anger, puff, whoosh).
+- поднятые лапы — поле позы `arm`: одна лапа (dict) или список из двух (`draw_arm()`);
+- наклейки — `extras` (`draw_extra()`: note, heart, sparkle, bang, sweat, shock, zzz, question,
+  anger, puff, whoosh, phone, battery, waves, drop).
 
 Персонаж выбирается в настройках приложения («Внешний вид → Персонаж»). `CharacterView`
 ищет файл `<персонаж>_<имя>` и, если его нет, берёт оригинальный файл слайма. Если у слайма

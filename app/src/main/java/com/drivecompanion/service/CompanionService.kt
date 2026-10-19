@@ -187,9 +187,11 @@ class CompanionService : Service(),
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startProviders() {
-        // Always active
+        // Always active: music, calls and low battery matter in the car too
         mediaProvider.start()
         bluetoothTrigger.start()
+        phoneCallProvider.start()
+        batteryProvider.start()
 
         val profile = profileManager.getCurrentProfile()
         if (profile == AppProfile.AUTO) {
@@ -220,13 +222,11 @@ class CompanionService : Service(),
     }
 
     private fun startDailyProviders() {
-        batteryProvider.start()
         timeProvider.start()
         screenProvider.start()
         stepProvider.start()
         weatherProvider.start()
         appUsageProvider.start()
-        phoneCallProvider.start()
     }
 
     private fun stopAutoProviders() {
@@ -235,13 +235,11 @@ class CompanionService : Service(),
     }
 
     private fun stopDailyProviders() {
-        batteryProvider.stop()
         timeProvider.stop()
         screenProvider.stop()
         stepProvider.stop()
         weatherProvider.stop()
         appUsageProvider.stop()
-        phoneCallProvider.stop()
     }
 
     // AccelerometerMonitor.Listener
@@ -313,8 +311,7 @@ class CompanionService : Service(),
             startDailyProviders()
         }
 
-        // Reset overlay state
-        overlayManager.getCharacterView()?.setState(CompanionState.CALM)
+        // Reset overlay state (the character itself follows the state machine)
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(WeatherModifier.NONE)
     }
 

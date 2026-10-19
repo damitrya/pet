@@ -12,6 +12,7 @@ import com.drivecompanion.data.ScreenData
 import com.drivecompanion.data.SettingsRepository
 import com.drivecompanion.data.StepData
 import com.drivecompanion.data.TimeData
+import com.drivecompanion.data.TurnDirection
 import com.drivecompanion.data.WeatherData
 import kotlin.random.Random
 
@@ -20,8 +21,10 @@ import kotlin.random.Random
  * Manages automatic BLINK transitions while in CALM state and falls asleep
  * after a long period without interaction.
  *
- * Priorities: ALERT > PET > interaction one-shots (TAP, ANNOYED, HEARTS, WAKE) >
- * events (GREETING, TRIP_START) > MUSIC > CALM / SLEEP.
+ * Priorities: ALERT > PET > sharp turns (TURN_LEFT/RIGHT) > interaction one-shots
+ * (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) > events (GREETING, TRIP_START, STRETCH) >
+ * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, DROWSY, LOW_BATTERY)
+ * only start from an ambient state.
  */
 class StateMachine(
     private val settings: SettingsRepository,
@@ -38,7 +41,7 @@ class StateMachine(
     private var currentWeatherModifier: WeatherModifier = WeatherModifier.NONE
 
     /**
-     * The last looping (ambient) state: either CALM or MUSIC.
+     * The last looping (ambient) state: CALM, MUSIC or PHONE_CALL.
      * One-shots (TAP, RELIEF, HEARTS, WAKE…) return here when their animation finishes.
      */
     private var baseLoopingState: CompanionState = CompanionState.CALM
@@ -58,8 +61,30 @@ class StateMachine(
     /** System time (ms) before which a new ALERT cannot be triggered (3-second cooldown). */
     private var alertCooldownUntil: Long = 0L
 
-    /** Times of recent taps, used to detect tap spam (→ ANNOYED). */
+    /** Times of recent taps, used to detect tap spam (→ ANNOYED) and double taps (→ BOUNCE). */
     private val recentTaps = ArrayDeque<Long>()
+
+    /** Times of recent pettings (finger released), used to detect a petting series (→ SHY). */
+    private val recentPets = ArrayDeque<Long>()
+
+    /** True while a phone call is active; PHONE_CALL is then the ambient state. */
+    private var callActive: Boolean = false
+
+    /** True while music is playing and music reactions are enabled (remembered during a call). */
+    private var musicPlaying: Boolean = false
+
+    /** When DROWSY was last played; it is shown at most once per idle period. */
+    private var drowsyAt: Long = 0L
+
+    /** Last sharp-turn reaction and the previous turning flag (reaction fires on the rising edge). */
+    private var turnAt: Long = 0L
+    private var wasTurning: Boolean = false
+
+    /** Next time LOW_BATTERY may play (0 = as soon as the battery is low). */
+    private var nextLowBatteryAt: Long = 0L
+
+    /** Last morning STRETCH; the time provider may report the same first unlock more than once. */
+    private var stretchAt: Long = 0L
 
     /** Last tap, long press, alert, music change or trip start. Drives falling asleep. */
     private var lastActivityAt: Long = clock()
@@ -93,13 +118,16 @@ class StateMachine(
         petActive = false
         tapQueued = false
         recentTaps.clear()
+        recentPets.clear()
         lastActivityAt = clock()
         lastSpeedKmh = 0f
         lastSpeedAt = 0L
         stoppedSince = 0L
         parked = false
         departedAt = 0L
-        transitionTo(CompanionState.CALM)
+        wasTurning = false
+        // A call or music outlives a profile switch: go straight back to it.
+        transitionTo(ambientState())
     }
 
     /** Called when the overlay appears: plays GREETING, then returns to CALM. */
@@ -123,9 +151,9 @@ class StateMachine(
                 transitionTo(CompanionState.RELIEF)
             }
             CompanionState.FALL_ASLEEP -> {
-                // Music started while dozing off — dance instead of sleeping.
+                // Music or a call started while dozing off — go there instead of sleeping.
                 transitionTo(
-                    if (baseLoopingState == CompanionState.MUSIC) CompanionState.MUSIC
+                    if (baseLoopingState != CompanionState.CALM) baseLoopingState
                     else CompanionState.SLEEP
                 )
             }
@@ -179,12 +207,21 @@ class StateMachine(
 
     /**
      * Triggered when the finger is released after a long press.
-     * Plays HEARTS, then returns to the saved looping state (CALM or MUSIC).
+     * Plays HEARTS — or SHY after [SHY_PET_COUNT] pettings within [SHY_WINDOW_MS] —
+     * then returns to the saved looping state.
      */
     fun onLongPressReleased() {
         if (currentState != CompanionState.PET) return
         petActive = false
-        transitionTo(CompanionState.HEARTS)
+        val now = clock()
+        recentPets.addLast(now)
+        while (recentPets.first() < now - SHY_WINDOW_MS) recentPets.removeFirst()
+        if (recentPets.size >= SHY_PET_COUNT) {
+            recentPets.clear()
+            transitionTo(CompanionState.SHY)
+        } else {
+            transitionTo(CompanionState.HEARTS)
+        }
     }
 
     /**
@@ -192,15 +229,17 @@ class StateMachine(
      *
      * - ALERT or PET is active → ignore (high-priority states block taps).
      * - ≥ [ANNOY_TAP_COUNT] taps within [ANNOY_WINDOW_MS] → ANNOYED (interrupts TAP).
+     * - Second tap within [DOUBLE_TAP_MS] while TAP plays → BOUNCE (replaces TAP).
      * - Sleeping or falling asleep → WAKE.
-     * - A looping state (CALM, MUSIC) is active → play TAP immediately.
-     * - TAP, ANNOYED or WAKE is playing → ignore (the tap still counts towards ANNOYED).
+     * - A looping state (CALM, MUSIC, PHONE_CALL) is active → play TAP immediately.
+     * - TAP, BOUNCE, ANNOYED or WAKE is playing → ignore (the tap still counts towards ANNOYED).
      * - Another one-shot is active (BLINK, GREETING, HEARTS…) → queue TAP.
      */
     fun onTap() {
         if (alertActive || petActive) return
 
         val now = clock()
+        val previousTap = recentTaps.lastOrNull()
         lastActivityAt = now
         recentTaps.addLast(now)
         while (recentTaps.first() < now - ANNOY_WINDOW_MS) recentTaps.removeFirst()
@@ -213,9 +252,14 @@ class StateMachine(
             return
         }
 
+        if (currentState == CompanionState.TAP && previousTap != null && now - previousTap <= DOUBLE_TAP_MS) {
+            transitionTo(CompanionState.BOUNCE)
+            return
+        }
+
         when (currentState) {
             CompanionState.SLEEP, CompanionState.FALL_ASLEEP -> transitionTo(CompanionState.WAKE)
-            CompanionState.TAP, CompanionState.ANNOYED, CompanionState.WAKE -> {}
+            CompanionState.TAP, CompanionState.BOUNCE, CompanionState.ANNOYED, CompanionState.WAKE -> {}
             else -> if (currentState.isLooping) {
                 // Immediate: remember where to return and play TAP
                 rememberBaseState()
@@ -245,6 +289,9 @@ class StateMachine(
         lastSpeedKmh = data.speedKmh
         lastSpeedAt = now
 
+        if (data.isTurning && !wasTurning) onSharpTurn(data.turnDirection)
+        wasTurning = data.isTurning
+
         if (data.speedKmh < STOPPED_KMH) {
             if (stoppedSince == 0L) stoppedSince = now
             if (now - stoppedSince >= PARKED_MS) {
@@ -262,6 +309,24 @@ class StateMachine(
                 }
             }
         }
+    }
+
+    /**
+     * Sharp turn: the character is thrown to the outside of the turn. Needs real driving speed
+     * ([TURN_MIN_KMH]) so that turning the phone in the hand does not count.
+     */
+    private fun onSharpTurn(direction: TurnDirection) {
+        if (direction == TurnDirection.NONE) return
+        if (alertActive || petActive) return
+        val now = clock()
+        if (now - turnAt < TURN_COOLDOWN_MS) return
+        if (lastSpeedKmh < TURN_MIN_KMH) return
+        turnAt = now
+        lastActivityAt = now
+        rememberBaseState()
+        transitionTo(
+            if (direction == TurnDirection.LEFT) CompanionState.TURN_LEFT else CompanionState.TURN_RIGHT
+        )
     }
 
     /** Plays TRIP_START; returns false if a higher-priority state (ALERT, PET) blocked it. */
@@ -282,6 +347,10 @@ class StateMachine(
         lastSpeedKmh >= STOPPED_KMH && clock() - lastSpeedAt <= GPS_STALE_MS
 
     fun updateMediaData(data: MediaData) {
+        musicPlaying = data.isPlaying && settings.musicReactionEnabled
+        // During a call PHONE_CALL wins; the call end picks MUSIC or CALM from musicPlaying.
+        if (callActive) return
+
         if (!settings.musicReactionEnabled) {
             if (currentState == CompanionState.MUSIC) {
                 transitionTo(CompanionState.CALM)
@@ -316,10 +385,34 @@ class StateMachine(
         }
     }
 
-    // Daily profile updates
-    fun updateBatteryData(data: BatteryData) {}
+    /**
+     * Low battery (not charging): LOW_BATTERY from CALM or MUSIC, repeated every
+     * [LOW_BATTERY_REPEAT_MS] while it stays low. Battery updates are frequent, so a moment
+     * when the character is busy is simply retried on the next one.
+     */
+    fun updateBatteryData(data: BatteryData) {
+        if (!data.isLow || data.isCharging) {
+            nextLowBatteryAt = 0L
+            return
+        }
+        val now = clock()
+        if (now < nextLowBatteryAt || !isAmbientAwake()) return
+        nextLowBatteryAt = now + LOW_BATTERY_REPEAT_MS
+        rememberBaseState()
+        transitionTo(CompanionState.LOW_BATTERY)
+    }
 
-    fun updateTimeData(data: TimeData) {}
+    /** First unlock of the day in the morning: STRETCH (also straight out of SLEEP). */
+    fun updateTimeData(data: TimeData) {
+        if (!data.isFirstUnlockOfDay) return
+        val now = clock()
+        if (stretchAt != 0L && now - stretchAt < STRETCH_DEDUP_MS) return
+        if (!isAmbientAwake() && currentState != CompanionState.SLEEP) return
+        stretchAt = now
+        lastActivityAt = now
+        rememberBaseState()
+        transitionTo(CompanionState.STRETCH)
+    }
 
     fun updateScreenData(data: ScreenData) {}
 
@@ -335,14 +428,52 @@ class StateMachine(
 
     fun updateAppUsageData(data: AppUsageData) {}
 
-    fun updatePhoneCallData(data: PhoneCallData) {}
+    /**
+     * Phone call start/end. PHONE_CALL becomes the ambient state: it replaces CALM/MUSIC at once
+     * (after WAKE if sleeping); one-shots and PET finish first and then return to it.
+     */
+    fun updatePhoneCallData(data: PhoneCallData) {
+        if (data.isInCall == callActive) return
+        callActive = data.isInCall
+        lastActivityAt = clock()
+
+        if (callActive) {
+            when (currentState) {
+                CompanionState.CALM, CompanionState.MUSIC -> transitionTo(CompanionState.PHONE_CALL)
+                CompanionState.SLEEP -> {
+                    baseLoopingState = CompanionState.PHONE_CALL
+                    transitionTo(CompanionState.WAKE)
+                }
+                else -> baseLoopingState = CompanionState.PHONE_CALL
+            }
+        } else {
+            if (currentState == CompanionState.PHONE_CALL) {
+                transitionTo(ambientState())
+            } else if (baseLoopingState == CompanionState.PHONE_CALL) {
+                baseLoopingState = ambientState()
+            }
+        }
+    }
+
+    /** The looping state the character should rest in right now. */
+    private fun ambientState(): CompanionState = when {
+        callActive -> CompanionState.PHONE_CALL
+        musicPlaying -> CompanionState.MUSIC
+        else -> CompanionState.CALM
+    }
+
+    /** True in CALM or MUSIC: free for idle one-shots that must not interrupt anything. */
+    private fun isAmbientAwake(): Boolean =
+        currentState == CompanionState.CALM || currentState == CompanionState.MUSIC
 
     /**
-     * Saves the current state as the return target if it is a true ambient state (CALM/MUSIC).
+     * Saves the current state as the return target if it is a true ambient state (CALM/MUSIC/PHONE_CALL).
      * For one-shots, PET and SLEEP, baseLoopingState already holds the correct target.
      */
     private fun rememberBaseState() {
-        if (currentState == CompanionState.CALM || currentState == CompanionState.MUSIC) {
+        if (currentState == CompanionState.CALM || currentState == CompanionState.MUSIC ||
+            currentState == CompanionState.PHONE_CALL
+        ) {
             baseLoopingState = currentState
         }
     }
@@ -373,8 +504,8 @@ class StateMachine(
                 baseLoopingState = CompanionState.CALM
                 scheduleNextBlink()
             }
-            CompanionState.MUSIC -> {
-                baseLoopingState = CompanionState.MUSIC
+            CompanionState.MUSIC, CompanionState.PHONE_CALL -> {
+                baseLoopingState = newState
                 cancelBlinkTimer()
             }
             // BLINK: the timer has already fired; others don't blink.
@@ -382,12 +513,20 @@ class StateMachine(
         }
     }
 
-    /** Blink timer tick in CALM: blink, or doze off after a long period without activity. */
+    /**
+     * Blink timer tick in CALM: blink; after a long period without activity first get DROWSY
+     * (once), then doze off. Neither happens while the car is moving.
+     */
     private fun triggerBlink() {
         if (currentState != CompanionState.CALM) return
-        val idleFor = clock() - lastActivityAt
-        if (idleFor >= SLEEP_AFTER_MS && !isConfirmedMoving()) {
+        val now = clock()
+        val idleFor = now - lastActivityAt
+        val moving = isConfirmedMoving()
+        if (idleFor >= SLEEP_AFTER_MS && !moving) {
             transitionTo(CompanionState.FALL_ASLEEP)
+        } else if (idleFor >= DROWSY_AFTER_MS && drowsyAt < lastActivityAt && !moving) {
+            drowsyAt = now
+            transitionTo(CompanionState.DROWSY)
         } else {
             transitionTo(CompanionState.BLINK)
         }
@@ -410,8 +549,28 @@ class StateMachine(
         private const val ANNOY_TAP_COUNT = 5
         private const val ANNOY_WINDOW_MS = 3000L
 
+        /** Second tap within this time of the first one while TAP plays → BOUNCE. */
+        private const val DOUBLE_TAP_MS = 350L
+
+        /** Pettings within [SHY_WINDOW_MS] that make the companion SHY instead of HEARTS. */
+        private const val SHY_PET_COUNT = 3
+        private const val SHY_WINDOW_MS = 20_000L
+
         /** Time without any activity in CALM before falling asleep. */
         private const val SLEEP_AFTER_MS = 3 * 60_000L
+
+        /** Time without any activity in CALM before DROWSY (once, ahead of falling asleep). */
+        private const val DROWSY_AFTER_MS = 2 * 60_000L
+
+        /** Minimum speed and pause between sharp-turn reactions. */
+        private const val TURN_MIN_KMH = 20f
+        private const val TURN_COOLDOWN_MS = 4000L
+
+        /** How often LOW_BATTERY repeats while the battery stays low and is not charging. */
+        private const val LOW_BATTERY_REPEAT_MS = 10 * 60_000L
+
+        /** A repeated first-unlock report within this time does not stretch again. */
+        private const val STRETCH_DEDUP_MS = 60_000L
 
         /** Below this speed the car counts as standing still; at or above it the companion stays awake. */
         private const val STOPPED_KMH = 3f
