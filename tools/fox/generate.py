@@ -1355,9 +1355,9 @@ def _turn(side):
         p = default_pose()
         throw = ramp(t, 0.02, 0.14) * (1 - ramp(t, 0.5, 0.78))
         wob = math.sin(2 * math.pi * (t - 0.5) * 3) * bump(t, 0.5, 0.95)
-        lean = -side * 9 * throw + -side * 3 * wob
-        p["lean"] = lean
-        p["dx"] = -side * 5 * throw
+        p["lean"] = -side * 6 * throw - side * 2.5 * wob
+        p["dx"] = -side * 2 * throw
+        p["dy"] = -3 * throw                       # lifted a little, so the paws stay in the frame
         p["head_tilt"] = -side * 6 * throw
         p["ear_l"] = side * 14 * throw
         p["ear_r"] = side * 14 * throw
