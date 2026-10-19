@@ -278,6 +278,9 @@ class StateMachine(
         }
     }
 
+    /** True while ALERT or PET plays: a profile switch now would cut it short. */
+    fun isBusy(): Boolean = alertActive || petActive
+
     fun destroy() {
         cancelBlinkTimer()
     }

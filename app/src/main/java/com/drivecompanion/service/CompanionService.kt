@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.drivecompanion.R
 import com.drivecompanion.data.AppProfile
@@ -26,6 +28,7 @@ import com.drivecompanion.data.MediaStateProvider
 import com.drivecompanion.data.PhoneCallData
 import com.drivecompanion.data.PhoneCallProvider
 import com.drivecompanion.data.ProfileManager
+import com.drivecompanion.data.ProfileSelector
 import com.drivecompanion.data.ScreenData
 import com.drivecompanion.data.ScreenStateProvider
 import com.drivecompanion.data.SensorDataProvider
@@ -64,6 +67,10 @@ class CompanionService : Service(),
         const val ACTION_HIDE = "com.drivecompanion.ACTION_HIDE"
         const val ACTION_TOGGLE = "com.drivecompanion.ACTION_TOGGLE"
         const val ACTION_STOP = "com.drivecompanion.ACTION_STOP"
+        const val ACTION_SWITCH_PROFILE = "com.drivecompanion.ACTION_SWITCH_PROFILE"
+
+        /** Retry interval while ALERT/PET postpones a profile switch. */
+        private const val BUSY_RETRY_MS = 2000L
 
         fun start(context: Context) {
             val intent = Intent(context, CompanionService::class.java)
@@ -97,14 +104,30 @@ class CompanionService : Service(),
     private lateinit var phoneCallProvider: PhoneCallProvider
     private lateinit var bluetoothTrigger: BluetoothTrigger
 
+    /** Providers run only after onStartCommand; a profile switch before that just records the profile. */
+    private var providersStarted = false
+
+    private val profileSelector = ProfileSelector()
+    private val handler = Handler(Looper.getMainLooper())
+    private val profileRecheck = Runnable { applyProfileSetting() }
+
     /**
-     * Applies profile changes made in SettingsActivity to the running service. Without it the
-     * service kept the profile it was created with, so "Auto" (GPS, braking) started only after
-     * a restart of the service.
+     * Applies changes made in SettingsActivity to the running service at once: profile mode,
+     * the car's Bluetooth device and the braking threshold.
      */
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
-            SettingsRepository.KEY_PROFILE_MODE, SettingsRepository.KEY_ACTIVE_PROFILE -> applyProfileSetting()
+            SettingsRepository.KEY_PROFILE_MODE -> {
+                profileSelector.override = null
+                bluetoothTrigger.start()      // no-op if running; picks up a newly granted permission
+                applyProfileSetting()
+            }
+            SettingsRepository.KEY_BLUETOOTH_DEVICE_ADDRESS -> {
+                profileSelector.forgetCar()
+                applyProfileSetting()
+                bluetoothTrigger.start()
+                bluetoothTrigger.checkConnected()
+            }
             SettingsRepository.KEY_ALERT_BRAKING_THRESHOLD ->
                 accelerometerMonitor.setThreshold(settings.alertBrakingThreshold)
         }
@@ -149,6 +172,9 @@ class CompanionService : Service(),
         createNotificationChannel()
         profileManager.restoreProfile()
         settings.registerChangeListener(settingsListener)
+        // In "auto_bluetooth" the saved profile may be stale (the last drive): start from DAILY,
+        // BluetoothTrigger switches to AUTO if the car is already connected.
+        applyProfileSetting()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -179,6 +205,10 @@ class CompanionService : Service(),
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_SWITCH_PROFILE -> {
+                switchProfileManually()
+                return START_STICKY
+            }
         }
 
         // Default start
@@ -193,6 +223,7 @@ class CompanionService : Service(),
 
     override fun onDestroy() {
         settings.unregisterChangeListener(settingsListener)
+        handler.removeCallbacks(profileRecheck)
         stateMachine.destroy()
         stopProviders()
         overlayManager.hide()
@@ -203,6 +234,8 @@ class CompanionService : Service(),
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun startProviders() {
+        if (providersStarted) return
+        providersStarted = true
         // Always active: music, calls and low battery matter in the car too
         mediaProvider.start()
         bluetoothTrigger.start()
@@ -218,6 +251,7 @@ class CompanionService : Service(),
     }
 
     private fun stopProviders() {
+        providersStarted = false
         accelerometerMonitor.stop()
         sensorProvider.stop()
         mediaProvider.stop()
@@ -312,41 +346,61 @@ class CompanionService : Service(),
     // ProfileManager.Listener
     override fun onProfileChanged(newProfile: AppProfile, previousProfile: AppProfile) {
         // Stop previous profile providers
-        if (previousProfile == AppProfile.AUTO) {
-            stopAutoProviders()
-        } else {
-            stopDailyProviders()
+        if (providersStarted) {
+            if (previousProfile == AppProfile.AUTO) stopAutoProviders() else stopDailyProviders()
         }
 
         // Switch state machine profile
         stateMachine.setProfile(newProfile)
 
         // Start new profile providers
-        if (newProfile == AppProfile.AUTO) {
-            startAutoProviders()
-        } else {
-            startDailyProviders()
+        if (providersStarted) {
+            if (newProfile == AppProfile.AUTO) startAutoProviders() else startDailyProviders()
         }
 
         // Reset overlay state (the character itself follows the state machine)
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(WeatherModifier.NONE)
+
+        // Getting into the car: say hello (TRIP_START follows on the first departure)
+        if (newProfile == AppProfile.AUTO && overlayManager.isVisible()) stateMachine.onOverlayShown()
+        if (providersStarted) updateNotification(overlayManager.isVisible())
     }
 
-    /** Manual modes switch at once; in "auto_bluetooth" the car's Bluetooth decides. */
+    /**
+     * Switches to the profile [ProfileSelector] picks. Postponed while ALERT or PET plays,
+     * and re-checked when a pending "left the car" delay runs out.
+     */
     private fun applyProfileSetting() {
-        when (settings.profileMode) {
-            "manual_auto" -> profileManager.switchProfile(AppProfile.AUTO)
-            "manual_daily" -> profileManager.switchProfile(AppProfile.DAILY)
+        handler.removeCallbacks(profileRecheck)
+        val target = profileSelector.resolve(settings.profileMode)
+        if (target != profileManager.getCurrentProfile() && stateMachine.isBusy()) {
+            handler.postDelayed(profileRecheck, BUSY_RETRY_MS)
+            return
+        }
+        profileManager.switchProfile(target)
+        profileSelector.msUntilChange()?.let { handler.postDelayed(profileRecheck, it + 100) }
+    }
+
+    /**
+     * Notification button. In a manual mode it flips the saved mode; in "auto_bluetooth" it is a
+     * temporary choice until the car next connects or disconnects.
+     */
+    private fun switchProfileManually() {
+        val target = if (profileManager.getCurrentProfile() == AppProfile.AUTO) AppProfile.DAILY else AppProfile.AUTO
+        if (settings.profileMode == ProfileSelector.MODE_AUTO_BLUETOOTH) {
+            profileSelector.override = target
+            applyProfileSetting()
+        } else {
+            // The settings listener applies it
+            settings.profileMode =
+                if (target == AppProfile.AUTO) ProfileSelector.MODE_MANUAL_AUTO else ProfileSelector.MODE_MANUAL_DAILY
         }
     }
 
     // BluetoothTrigger.Listener
-    override fun onBluetoothAutoProfile(switchToAuto: Boolean) {
-        if (settings.profileMode == "auto_bluetooth") {
-            profileManager.switchProfile(
-                if (switchToAuto) AppProfile.AUTO else AppProfile.DAILY
-            )
-        }
+    override fun onCarBluetoothChanged(connected: Boolean) {
+        profileSelector.onCarBluetooth(connected)
+        applyProfileSetting()
     }
 
     // StateMachine.Listener
@@ -431,15 +485,28 @@ class CompanionService : Service(),
             getString(R.string.action_show)
         }
 
+        val switchIntent = Intent(this, CompanionService::class.java).apply {
+            action = ACTION_SWITCH_PROFILE
+        }
+        val switchPending = PendingIntent.getService(
+            this, 3, switchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val inCar = profileManager.getCurrentProfile() == AppProfile.AUTO
+        val switchLabel = getString(if (inCar) R.string.action_switch_to_daily else R.string.action_switch_to_auto)
+        val modeText = getString(if (inCar) R.string.notification_mode_auto else R.string.notification_mode_daily)
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(
                 if (isVisible) getString(R.string.notification_text_active)
                 else getString(R.string.notification_text_hidden)
             )
+            .setSubText(modeText)
             .setSmallIcon(R.drawable.ic_companion_notification)
             .setContentIntent(settingsPending)
             .setOngoing(true)
+            .addAction(0, switchLabel, switchPending)
             .addAction(0, toggleLabel, togglePending)
             .addAction(0, getString(R.string.action_stop), stopPending)
             .build()

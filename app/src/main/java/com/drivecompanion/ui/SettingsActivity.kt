@@ -1,6 +1,7 @@
 package com.drivecompanion.ui
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -11,6 +12,7 @@ import android.view.View
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.drivecompanion.R
@@ -36,6 +38,13 @@ class SettingsActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
         updatePermissionStatus()
+    }
+
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) showBluetoothDevicePicker()
+        else Toast.makeText(this, R.string.bluetooth_no_permission, Toast.LENGTH_SHORT).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -160,9 +169,51 @@ class SettingsActivity : AppCompatActivity() {
                 }
                 R.id.radio_profile_bluetooth -> {
                     settings.profileMode = "auto_bluetooth"
+                    if (settings.bluetoothDeviceAddress.isBlank()) pickBluetoothDevice()
                 }
             }
             updateProfileVisibility()
+        }
+
+        binding.btnBluetoothDevice.setOnClickListener { pickBluetoothDevice() }
+        updateBluetoothDeviceLabel()
+    }
+
+    private fun pickBluetoothDevice() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            showBluetoothDevicePicker()
+        }
+    }
+
+    /** "Any car stereo" first, then the paired devices. */
+    private fun showBluetoothDevicePicker() {
+        val bonded = try {
+            getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
+                ?.sortedBy { it.name ?: it.address }.orEmpty()
+        } catch (_: SecurityException) {
+            emptyList()
+        }
+        val names = listOf(getString(R.string.bluetooth_any_car)) + bonded.map { it.name ?: it.address }
+        val addresses = listOf(SettingsRepository.BLUETOOTH_ANY_CAR) + bonded.map { it.address }
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bluetooth_choose_title)
+            .setItems(names.toTypedArray()) { _, which ->
+                settings.bluetoothDeviceName = names[which]
+                settings.bluetoothDeviceAddress = addresses[which]   // the service reacts to this key
+                updateBluetoothDeviceLabel()
+            }
+            .show()
+    }
+
+    private fun updateBluetoothDeviceLabel() {
+        binding.btnBluetoothDevice.text = settings.bluetoothDeviceName.ifBlank {
+            getString(R.string.bluetooth_not_selected)
         }
     }
 
@@ -220,6 +271,8 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun updateProfileVisibility() {
+        binding.layoutBluetoothDevice.visibility =
+            if (settings.profileMode == "auto_bluetooth") View.VISIBLE else View.GONE
         val isAutoOnly = settings.profileMode == "manual_auto"
         binding.cardDailySettings.visibility = if (isAutoOnly) View.GONE else View.VISIBLE
         binding.cardThresholds.visibility = if (settings.profileMode == "manual_daily") View.GONE else View.VISIBLE

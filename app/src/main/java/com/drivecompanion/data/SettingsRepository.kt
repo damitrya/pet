@@ -55,6 +55,9 @@ class SettingsRepository(context: Context) {
         const val CHARACTER_SLIME = "slime"
         const val CHARACTER_FOX = "fox"
 
+        /** [bluetoothDeviceAddress] value meaning "any car audio / hands-free device". */
+        const val BLUETOOTH_ANY_CAR = "any_car"
+
         // Defaults
         const val DEFAULT_SIZE = 150
         const val DEFAULT_OPACITY = 100
