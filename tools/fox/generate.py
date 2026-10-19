@@ -429,14 +429,14 @@ def draw_mouth(cv, pose, tf):
 def draw_arm(cv, arm, tf):
     """Raised front paw: an orange limb from the shoulder with a dark paw at the end."""
     side = arm["side"]
-    shoulder = (64 + side * 20, 101)
+    shoulder = (64 + side * 22, 96)
     paw = (arm["x"], arm["y"])
     elbow = (lerp(shoulder[0], paw[0], 0.5) + side * 6, lerp(shoulder[1], paw[1], 0.5) + 2)
     limb = bezier(shoulder, elbow, paw, 16)
-    cv.paint(Canvas.stroke_mask(limb, 11.5, tf), OUTLINE)
-    cv.paint(Canvas.stroke_mask(limb, 8.5, tf), ORANGE_TOP)
-    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.8, 6.0), tf), OUTLINE)
-    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 5.4, 4.7), tf), PAW)
+    cv.paint(Canvas.stroke_mask(limb, 16, tf), OUTLINE)
+    cv.paint(Canvas.stroke_mask(limb, 12.5, tf), ORANGE_TOP)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 8.2, 7.4), tf), OUTLINE)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.6, 5.8), tf), PAW)
 
 
 # ---------------------------------------------------------------- extras
@@ -759,7 +759,7 @@ def ear_scratch(i, n):
     p["head_tilt"] = 10 * up
     p["lean"] = 3 * up
     p["ear_r"] = -6 * up + 7 * scratch
-    p["arm"] = dict(side=1, x=lerp(84, 92 + 2 * scratch, up), y=lerp(110, 38 + 4 * scratch, up)) if up > 0.02 else None
+    p["arm"] = dict(side=1, x=lerp(86, 96 + 2 * scratch, up), y=lerp(108, 50 + 4 * scratch, up)) if up > 0.02 else None
     p["eyes"] = "closed" if up > 0.6 else "open"
     p["mouth"] = "w"
     p["blush"] = 0.5 + 0.3 * up
@@ -888,7 +888,7 @@ def greeting(i, n):
     raise_ = ramp(t, 0.18, 0.3) * (1 - ramp(t, 0.84, 0.96))
     wave = math.sin(2 * math.pi * (t - 0.3) * 4) * ramp(t, 0.3, 0.36) * (1 - ramp(t, 0.78, 0.84))
     if raise_ > 0.02:
-        p["arm"] = dict(side=-1, x=lerp(42, 20 + 5 * wave, raise_), y=lerp(110, 52 - 3 * abs(wave), raise_))
+        p["arm"] = dict(side=-1, x=lerp(42, 24 + 5 * wave, raise_), y=lerp(108, 62 - 3 * abs(wave), raise_))
     p["lean"] = 3 * wave * raise_
     p["head_tilt"] = -6 * raise_
     p["ear_out"] = -6 * over + 4 * raise_
