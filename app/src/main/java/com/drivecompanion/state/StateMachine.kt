@@ -64,14 +64,18 @@ class StateMachine(
     /** Last tap, long press, alert, music change or trip start. Drives falling asleep. */
     private var lastActivityAt: Long = clock()
 
-    /** Latest GPS speed; the companion does not fall asleep while the car is moving. */
+    /** Latest GPS speed and when it arrived; the companion does not fall asleep while the car is moving. */
     private var lastSpeedKmh: Float = 0f
+    private var lastSpeedAt: Long = 0L
 
     /** When the car came to a stop (0 = moving or unknown). */
     private var stoppedSince: Long = 0L
 
     /** True once the car has been standing long enough for the next departure to count as a trip start. */
     private var parked: Boolean = false
+
+    /** When the car left the parking spot; TRIP_START blocked by ALERT/PET is retried until [TRIP_START_RETRY_MS]. */
+    private var departedAt: Long = 0L
 
     private val handler = Handler(Looper.getMainLooper())
     private val blinkRunnable = Runnable { triggerBlink() }
@@ -91,8 +95,10 @@ class StateMachine(
         recentTaps.clear()
         lastActivityAt = clock()
         lastSpeedKmh = 0f
+        lastSpeedAt = 0L
         stoppedSince = 0L
         parked = false
+        departedAt = 0L
         transitionTo(CompanionState.CALM)
     }
 
@@ -230,31 +236,50 @@ class StateMachine(
     /**
      * Detects the start of a trip: the car stood still for at least [PARKED_MS],
      * then reached [MOVING_KMH]. Short stops (traffic lights) do not count.
+     * If ALERT or PET is playing at that moment, TRIP_START is retried on the next updates
+     * for up to [TRIP_START_RETRY_MS] after departure.
      */
     fun updateDrivingData(data: DrivingData) {
         if (!data.hasGpsFix) return
         val now = clock()
         lastSpeedKmh = data.speedKmh
+        lastSpeedAt = now
 
         if (data.speedKmh < STOPPED_KMH) {
             if (stoppedSince == 0L) stoppedSince = now
-            if (now - stoppedSince >= PARKED_MS) parked = true
+            if (now - stoppedSince >= PARKED_MS) {
+                parked = true
+                departedAt = 0L
+            }
         } else {
             stoppedSince = 0L
             if (parked && data.speedKmh >= MOVING_KMH) {
-                parked = false
-                onTripStarted()
+                if (departedAt == 0L) departedAt = now
+                if (now - departedAt > TRIP_START_RETRY_MS) {
+                    parked = false       // too late to celebrate the departure
+                } else if (onTripStarted()) {
+                    parked = false
+                }
             }
         }
     }
 
-    private fun onTripStarted() {
-        if (alertActive || petActive) return
+    /** Plays TRIP_START; returns false if a higher-priority state (ALERT, PET) blocked it. */
+    private fun onTripStarted(): Boolean {
+        if (alertActive || petActive) return false
         lastActivityAt = clock()
         tapQueued = false
         rememberBaseState()
         transitionTo(CompanionState.TRIP_START)
+        return true
     }
+
+    /**
+     * True if fresh GPS data shows the car is moving (even slowly). Stale speed —
+     * no updates for [GPS_STALE_MS], e.g. GPS lost in a tunnel — does not count as moving.
+     */
+    private fun isConfirmedMoving(): Boolean =
+        lastSpeedKmh >= STOPPED_KMH && clock() - lastSpeedAt <= GPS_STALE_MS
 
     fun updateMediaData(data: MediaData) {
         if (!settings.musicReactionEnabled) {
@@ -361,7 +386,7 @@ class StateMachine(
     private fun triggerBlink() {
         if (currentState != CompanionState.CALM) return
         val idleFor = clock() - lastActivityAt
-        if (idleFor >= SLEEP_AFTER_MS && lastSpeedKmh < MOVING_KMH) {
+        if (idleFor >= SLEEP_AFTER_MS && !isConfirmedMoving()) {
             transitionTo(CompanionState.FALL_ASLEEP)
         } else {
             transitionTo(CompanionState.BLINK)
@@ -388,11 +413,17 @@ class StateMachine(
         /** Time without any activity in CALM before falling asleep. */
         private const val SLEEP_AFTER_MS = 3 * 60_000L
 
-        /** Below this speed the car counts as standing still. */
+        /** Below this speed the car counts as standing still; at or above it the companion stays awake. */
         private const val STOPPED_KMH = 3f
 
-        /** Speed that counts as "the trip has started" (and prevents falling asleep). */
+        /** Speed that counts as "the trip has started". */
         private const val MOVING_KMH = 15f
+
+        /** GPS speed older than this is ignored when deciding whether the car is moving. */
+        private const val GPS_STALE_MS = 10_000L
+
+        /** How long after departure a TRIP_START blocked by ALERT/PET may still be played. */
+        private const val TRIP_START_RETRY_MS = 30_000L
 
         /** Standstill longer than this (not a traffic light) makes the next departure a TRIP_START. */
         private const val PARKED_MS = 3 * 60_000L

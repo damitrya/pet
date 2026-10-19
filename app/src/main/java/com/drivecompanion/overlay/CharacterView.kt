@@ -40,6 +40,15 @@ class CharacterView @JvmOverloads constructor(
 
     private var currentState: CompanionState? = null
 
+    /** Most recently used decoded animations (small: 128×128 frames are decoded on the fly). */
+    private val drawableCache = object : LinkedHashMap<Int, Drawable>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Drawable>?) =
+            size > MAX_CACHED_DRAWABLES
+    }
+
+    /** "<character>/<variant>" → raw resource id (0 = unavailable); avoids getIdentifier() on every pick. */
+    private val resolvedIds = HashMap<String, Int>()
+
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
 
@@ -92,19 +101,27 @@ class CharacterView @JvmOverloads constructor(
         val resId = variant?.let { resolveVariant(it) } ?: 0
         if (resId == 0) { setFallbackAnimation(state); return }
 
-        val source = ImageDecoder.createSource(context.resources, resId)
-        val drawable = ImageDecoder.decodeDrawable(source)
+        val drawable = obtainDrawable(resId)
+        val previous = imageView.drawable as? AnimatedImageDrawable
+        if (previous != null && previous !== drawable) {
+            previous.clearAnimationCallbacks()
+            previous.stop()
+        }
 
         imageView.visibility = View.VISIBLE
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
+            // A cached drawable may still be running (e.g. PET → HEARTS share pet.webp for the slime):
+            // stop() makes the next start() replay from the first frame.
+            clearAnimationCallbacks()
+            stop()
             if (state.isLooping && pool.variants.size > 1) {
                 // Play once, then pick the next variant
                 repeatCount = 0
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
                         post {
-                            if (currentState == state && imageView.drawable === d) playVideo(state)
+                            if (isRealEnd(d) && currentState == state) playVideo(state)
                         }
                     }
                 })
@@ -114,8 +131,7 @@ class CharacterView @JvmOverloads constructor(
                     registerAnimationCallback(object : Animatable2.AnimationCallback() {
                         override fun onAnimationEnd(d: Drawable?) {
                             post {
-                                // Ignore a replaced drawable: the state was interrupted (or re-entered).
-                                if (imageView.drawable === d) oneShotAnimationEndListener?.invoke(state)
+                                if (isRealEnd(d)) oneShotAnimationEndListener?.invoke(state)
                             }
                         }
                     })
@@ -125,20 +141,37 @@ class CharacterView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * True if the drawable genuinely finished: it is still the one on screen (the state was not
+     * interrupted) and it is not running (the end was not the one posted by stop() before a replay).
+     */
+    private fun isRealEnd(d: Drawable?): Boolean =
+        d != null && imageView.drawable === d && !(d as AnimatedImageDrawable).isRunning
+
+    /**
+     * Decoded drawables are cached and replayed instead of re-decoding the WebP on every
+     * CALM/MUSIC cycle. Keyed by resource id, so a character change simply misses the cache.
+     */
+    private fun obtainDrawable(resId: Int): Drawable =
+        drawableCache.getOrPut(resId) {
+            ImageDecoder.decodeDrawable(ImageDecoder.createSource(context.resources, resId))
+        }
+
     /** Raw resource for the variant: its own file, else its fallback, else 0 (variant unavailable). */
     private fun resolveVariant(variant: AnimationVariant): Int {
-        val id = resolveRawRes(variant.resName)
-        if (id != 0) return id
-        return variant.fallback?.let { resolveRawRes(it) } ?: 0
+        val character = settings.character
+        return resolvedIds.getOrPut("$character/${variant.resName}") {
+            val id = resolveRawRes(character, variant.resName)
+            if (id != 0) id else variant.fallback?.let { resolveRawRes(character, it) } ?: 0
+        }
     }
 
     /**
      * Finds the animation for the selected character: "<character>_<name>" (e.g. fox_tap),
      * falling back to the unprefixed original (slime) file if that character lacks it.
      */
-    private fun resolveRawRes(resName: String): Int {
+    private fun resolveRawRes(character: String, resName: String): Int {
         val res = context.resources
-        val character = settings.character
         if (character != SettingsRepository.CHARACTER_SLIME) {
             val id = res.getIdentifier("${character}_$resName", "raw", context.packageName)
             if (id != 0) return id
@@ -169,5 +202,9 @@ class CharacterView @JvmOverloads constructor(
         } else {
             if (!lottieView.isAnimating) lottieView.resumeAnimation()
         }
+    }
+
+    companion object {
+        private const val MAX_CACHED_DRAWABLES = 12
     }
 }
