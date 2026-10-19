@@ -18,12 +18,12 @@ import kotlin.random.Random
 
 /**
  * Finite state machine that determines the companion's current state.
- * Manages automatic BLINK transitions while in CALM state and falls asleep
- * after a long period without interaction.
+ * Manages automatic BLINK transitions while in CALM state, short FIDGET breaks while dancing
+ * to MUSIC, and falls asleep after a long period without interaction.
  *
  * Priorities: ALERT > PET > sharp turns (TURN_LEFT/RIGHT) > interaction one-shots
  * (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) > events (GREETING, TRIP_START, STRETCH) >
- * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, DROWSY, LOW_BATTERY)
+ * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, FIDGET, DROWSY, LOW_BATTERY)
  * only start from an ambient state.
  */
 class StateMachine(
@@ -504,8 +504,12 @@ class StateMachine(
                 baseLoopingState = CompanionState.CALM
                 scheduleNextBlink()
             }
-            CompanionState.MUSIC, CompanionState.PHONE_CALL -> {
-                baseLoopingState = newState
+            CompanionState.MUSIC -> {
+                baseLoopingState = CompanionState.MUSIC
+                scheduleNextBlink()
+            }
+            CompanionState.PHONE_CALL -> {
+                baseLoopingState = CompanionState.PHONE_CALL
                 cancelBlinkTimer()
             }
             // BLINK: the timer has already fired; others don't blink.
@@ -518,6 +522,11 @@ class StateMachine(
      * (once), then doze off. Neither happens while the car is moving.
      */
     private fun triggerBlink() {
+        if (currentState == CompanionState.MUSIC) {
+            // Music never ends in the car — break up the dancing with other idle reactions.
+            transitionTo(CompanionState.FIDGET)
+            return
+        }
         if (currentState != CompanionState.CALM) return
         val now = clock()
         val idleFor = now - lastActivityAt
@@ -532,9 +541,14 @@ class StateMachine(
         }
     }
 
+    /** Next blink in CALM (3–7 s) or the next FIDGET break in MUSIC (20–40 s). */
     private fun scheduleNextBlink() {
         cancelBlinkTimer()
-        val delayMs = 3000L + Random.nextLong(4001L) // 3000..7000 ms
+        val delayMs = if (currentState == CompanionState.MUSIC) {
+            20_000L + Random.nextLong(20_001L)
+        } else {
+            3000L + Random.nextLong(4001L)
+        }
         handler.postDelayed(blinkRunnable, delayMs)
     }
 

@@ -118,7 +118,17 @@ object AnimationPools {
         CompanionState.TURN_RIGHT to single("turn_right", fallback = "alert"),
         CompanionState.PHONE_CALL to single("phone_call", fallback = "idle_small"),
         CompanionState.LOW_BATTERY to single("low_battery", fallback = "blink"),
-        CompanionState.STRETCH to single("stretch", fallback = "idle2")
+        CompanionState.STRETCH to single("stretch", fallback = "idle2"),
+        CompanionState.FIDGET to AnimationPool(listOf(
+            AnimationVariant("blink", weight = 15),
+            AnimationVariant("idle2", weight = 20, cooldown = 1),
+            AnimationVariant("tail_wag", weight = 20, cooldown = 1),
+            AnimationVariant("ear_scratch", weight = 12, cooldown = 2),
+            AnimationVariant("head_tilt", weight = 12, cooldown = 2),
+            AnimationVariant("shake", weight = 8, cooldown = 3),
+            AnimationVariant("surprise", weight = 7, cooldown = 3),
+            AnimationVariant("tail_play", weight = 6, cooldown = 4)
+        ))
     )
 
     fun forState(state: CompanionState): AnimationPool =

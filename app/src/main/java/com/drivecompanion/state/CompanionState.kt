@@ -79,6 +79,12 @@ enum class CompanionState(
     /** One-shot worry when the battery gets low (not charging). */
     LOW_BATTERY("", false, "low_battery"),
 
+    /**
+     * One-shot break from dancing: every 20–40 s of MUSIC the character does something else
+     * (blinks, looks around, wags its tail…), then goes back to MUSIC.
+     */
+    FIDGET("", false, "blink"),
+
     /** One-shot morning stretch on the first unlock of the day (Daily profile). */
     STRETCH("", false, "stretch");
 }
