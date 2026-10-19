@@ -14,6 +14,7 @@ class SettingsRepository(context: Context) {
         const val KEY_OVERLAY_X = "overlay_x"
         const val KEY_OVERLAY_Y = "overlay_y"
         const val KEY_OVERLAY_OPACITY = "overlay_opacity"
+        const val KEY_CHARACTER = "character"
 
         // Speed thresholds (km/h)
         const val KEY_THRESHOLD_WALK = "threshold_walk"
@@ -50,6 +51,10 @@ class SettingsRepository(context: Context) {
         const val KEY_ALERT_BRAKING_THRESHOLD = "alert_braking_threshold"
         const val DEFAULT_ALERT_BRAKING_THRESHOLD = -4.0f
 
+        // Characters: value is the prefix of the character's res/raw animation files
+        const val CHARACTER_SLIME = "slime"
+        const val CHARACTER_FOX = "fox"
+
         // Defaults
         const val DEFAULT_SIZE = 150
         const val DEFAULT_OPACITY = 100
@@ -78,6 +83,11 @@ class SettingsRepository(context: Context) {
     var overlayOpacity: Int
         get() = prefs.getInt(KEY_OVERLAY_OPACITY, DEFAULT_OPACITY)
         set(value) = prefs.edit().putInt(KEY_OVERLAY_OPACITY, value).apply()
+
+    /** [CHARACTER_SLIME] (original, unprefixed files) or [CHARACTER_FOX] (fox_*.webp). */
+    var character: String
+        get() = prefs.getString(KEY_CHARACTER, CHARACTER_SLIME) ?: CHARACTER_SLIME
+        set(value) = prefs.edit().putString(KEY_CHARACTER, value).apply()
 
     // Speed thresholds
     var thresholdWalk: Float

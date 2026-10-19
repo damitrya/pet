@@ -75,6 +75,19 @@ class SettingsActivity : AppCompatActivity() {
             updateServiceButton()
         }
 
+        // Character choice — CharacterView picks it up on its next animation
+        binding.radioCharacter.check(
+            if (settings.character == SettingsRepository.CHARACTER_FOX) R.id.radio_character_fox
+            else R.id.radio_character_slime
+        )
+        binding.radioCharacter.setOnCheckedChangeListener { _, checkedId ->
+            settings.character = if (checkedId == R.id.radio_character_fox) {
+                SettingsRepository.CHARACTER_FOX
+            } else {
+                SettingsRepository.CHARACTER_SLIME
+            }
+        }
+
         // Character size slider
         binding.seekbarSize.max = 250 - 80
         binding.seekbarSize.progress = settings.characterSize - 80

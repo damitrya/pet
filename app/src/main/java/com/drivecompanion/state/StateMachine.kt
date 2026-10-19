@@ -61,6 +61,11 @@ class StateMachine(private val settings: SettingsRepository) {
     fun getCurrentState(): CompanionState = currentState
 
     fun setProfile(profile: AppProfile) {
+        // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
+        // will no longer match the current state, so clear their guards explicitly.
+        alertActive = false
+        petActive = false
+        tapQueued = false
         transitionTo(CompanionState.CALM)
     }
 

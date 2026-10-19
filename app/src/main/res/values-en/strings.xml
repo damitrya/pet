@@ -18,6 +18,9 @@
     <!-- Settings Sections -->
     <string name="section_permissions">Permissions</string>
     <string name="section_appearance">Appearance</string>
+    <string name="label_character">Character</string>
+    <string name="character_slime">Slime</string>
+    <string name="character_fox">Fox cub</string>
     <string name="section_behavior">Behavior</string>
     <string name="section_thresholds">Speed thresholds</string>
     <string name="section_profile">Profile</string>

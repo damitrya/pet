@@ -158,22 +158,34 @@ class OverlayManager(
                 }
                 MotionEvent.ACTION_UP -> {
                     longPressHandler.removeCallbacks(longPressRunnable)
-                    when {
-                        isDragging -> {
-                            // Save new position
-                            settings.overlayX = layoutParams?.x ?: 0
-                            settings.overlayY = layoutParams?.y ?: 0
-                        }
-                        isLongPressActive -> {
-                            // Finger released after long press — end PET animation
-                            isLongPressActive = false
-                            onLongPressReleasedListener?.invoke()
-                        }
-                        else -> {
-                            // Short tap → trigger TAP animation
-                            onTapListener?.invoke()
-                        }
+                    // End PET first: the finger may have started dragging after the long press fired.
+                    val wasLongPress = isLongPressActive
+                    if (wasLongPress) {
+                        isLongPressActive = false
+                        onLongPressReleasedListener?.invoke()
                     }
+                    if (isDragging) {
+                        // Save new position
+                        settings.overlayX = layoutParams?.x ?: 0
+                        settings.overlayY = layoutParams?.y ?: 0
+                    } else if (!wasLongPress) {
+                        // Short tap → trigger TAP animation
+                        onTapListener?.invoke()
+                    }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // Gesture interrupted by the system: never fire a tap, but always end PET.
+                    longPressHandler.removeCallbacks(longPressRunnable)
+                    if (isDragging) {
+                        settings.overlayX = layoutParams?.x ?: 0
+                        settings.overlayY = layoutParams?.y ?: 0
+                    }
+                    if (isLongPressActive) {
+                        isLongPressActive = false
+                        onLongPressReleasedListener?.invoke()
+                    }
+                    isDragging = false
                     true
                 }
                 else -> false

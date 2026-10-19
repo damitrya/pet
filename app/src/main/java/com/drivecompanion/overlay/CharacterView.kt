@@ -11,6 +11,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
+import com.drivecompanion.data.SettingsRepository
 import com.drivecompanion.state.CompanionState
 
 /**
@@ -32,6 +33,8 @@ class CharacterView @JvmOverloads constructor(
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         visibility = View.GONE
     }
+
+    private val settings = SettingsRepository(context)
 
     private var currentState: CompanionState? = null
 
@@ -93,7 +96,7 @@ class CharacterView @JvmOverloads constructor(
             resName = if (useIdleTrack2) "idle2" else "idle_small"
             useIdleTrack2 = !useIdleTrack2
         }
-        val resId = context.resources.getIdentifier(resName, "raw", context.packageName)
+        val resId = resolveRawRes(resName)
         if (resId == 0) { setFallbackAnimation(state); return }
 
         val source = ImageDecoder.createSource(context.resources, resId)
@@ -125,6 +128,20 @@ class CharacterView @JvmOverloads constructor(
             }
             start()
         }
+    }
+
+    /**
+     * Finds the animation for the selected character: "<character>_<name>" (e.g. fox_tap),
+     * falling back to the unprefixed original (slime) file if that character lacks it.
+     */
+    private fun resolveRawRes(resName: String): Int {
+        val res = context.resources
+        val character = settings.character
+        if (character != SettingsRepository.CHARACTER_SLIME) {
+            val id = res.getIdentifier("${character}_$resName", "raw", context.packageName)
+            if (id != 0) return id
+        }
+        return res.getIdentifier(resName, "raw", context.packageName)
     }
 
     private fun stopAnimatedDrawable() {

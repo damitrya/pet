@@ -18,6 +18,9 @@
     <!-- Settings Sections -->
     <string name="section_permissions">Разрешения</string>
     <string name="section_appearance">Внешний вид</string>
+    <string name="label_character">Персонаж</string>
+    <string name="character_slime">Слайм</string>
+    <string name="character_fox">Лисёнок</string>
     <string name="section_behavior">Поведение</string>
     <string name="section_thresholds">Пороги скорости</string>
     <string name="section_profile">Профиль</string>
