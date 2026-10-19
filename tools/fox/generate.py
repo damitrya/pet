@@ -240,7 +240,7 @@ def default_pose():
         tail=0.0, tail_curl=0.0,
         eyes="open", open=1.0, look=(0.0, 0.0),
         mouth="w", mouth_open=1.0, blush=0.5,
-        arm=None,  # raised front paw: dict(side=-1|1, x=.., y=..) — paw position, body space
+        arm=None,  # raised front paw(s): dict(side=-1|1, x=.., y=..) or a list of them — paw position, body space
         extras=[],
     )
 
@@ -344,8 +344,9 @@ def draw_character(pose):
 
     draw_mouth(cv, pose, head_tf)
 
-    if pose["arm"]:
-        draw_arm(cv, pose["arm"], body_tf)
+    arms = pose["arm"]
+    for arm in ([arms] if isinstance(arms, dict) else arms or []):
+        draw_arm(cv, arm, body_tf)
 
     out = cv.outlined(1.4)
     for extra in pose["extras"]:
@@ -507,6 +508,23 @@ def draw_extra(img, e):
         blobs = [ellipse_pts(x + dx * s, y + dy * s, r * s, r * s)
                  for dx, dy, r in ((0, 0, 4.5), (5, -2, 3.8), (-4.5, -1.5, 3.4), (2, -5, 3.4))]
         layer = _sticker(blobs, (240, 244, 252), outline=(150, 160, 185), opacity=op, out_px=0.9)
+    elif kind == "phone":
+        layer = _phone(x, y, s, e.get("rot", 0.0), op)
+    elif kind == "battery":
+        layer = _battery(x, y, s, e.get("level", 0.15), e.get("blink", 1.0), op)
+    elif kind == "waves":
+        strokes = []
+        side = e.get("side", 1)
+        for k in (0, 1):
+            r = (4 + 4 * k) * s
+            strokes.append((bezier((x, y - r), (x + side * r * 1.25, y), (x, y + r), 10), 1.6 * s))
+        layer = _sticker([], (90, 110, 210), strokes, opacity=op, out_px=1.0)
+    elif kind == "drop":
+        r = math.radians(e.get("rot", 0.0))
+        c, si = math.cos(r), math.sin(r)
+        pts = [(0, -5), (3.2, 1.2), (0, 3.8), (-3.2, 1.2)]
+        drop = chaikin([(x + (px * c - py * si) * s, y + (px * si + py * c) * s) for px, py in pts], 3)
+        layer = _sticker([drop], (110, 190, 255), opacity=op, out_px=1.0)
     elif kind == "whoosh":
         strokes = [([(x - 7 * s + dx, y + dy), (x + 7 * s + dx, y + dy)], 1.8)
                    for dx, dy in ((0, -7 * s), (-5 * s, 0), (2 * s, 7 * s))]
@@ -514,6 +532,40 @@ def draw_extra(img, e):
     else:
         return
     img.alpha_composite(layer)
+
+
+def _rect_pts(cx, cy, w, h, rot=0.0, round_=2):
+    r = math.radians(rot)
+    c, s = math.cos(r), math.sin(r)
+    corners = [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+    return chaikin([(cx + px * c - py * s, cy + px * s + py * c) for px, py in corners], round_)
+
+
+def _phone(x, y, s, rot, op):
+    cv = Canvas()
+    cv.paint(Canvas.poly_mask(_rect_pts(x, y, 10 * s, 18 * s, rot)), (52, 58, 78))
+    cv.paint(Canvas.poly_mask(_rect_pts(x, y - 0.6 * s, 7 * s, 12.5 * s, rot, 1)), (130, 200, 255))
+    img = cv.outlined(1.1, WHITE)
+    if op < 1:
+        img.putalpha(img.getchannel("A").point(lambda v: int(v * op)))
+    return img
+
+
+def _battery(x, y, s, level, blink, op):
+    """Horizontal battery; the charge bar is red when low and fades with `blink`."""
+    cv = Canvas()
+    w, h = 22 * s, 11 * s
+    cv.paint(Canvas.poly_mask(_rect_pts(x, y, w, h)), (60, 64, 80))
+    cv.paint(Canvas.poly_mask(_rect_pts(x + w / 2 + 1.6 * s, y, 3 * s, 5 * s, 0, 1)), (60, 64, 80))
+    cv.paint(Canvas.poly_mask(_rect_pts(x, y, w - 4 * s, h - 4 * s, 0, 1)), WHITE)
+    fill_w = max(1.0, (w - 6 * s) * clamp(level))
+    col = (236, 56, 48) if level < 0.3 else (70, 200, 90)
+    bar = _rect_pts(x - (w - 6 * s) / 2 + fill_w / 2, y, fill_w, h - 6 * s, 0, 1)
+    cv.paint(Canvas.poly_mask(bar), col, clamp(blink))
+    img = cv.outlined(1.1, WHITE)
+    if op < 1:
+        img.putalpha(img.getchannel("A").point(lambda v: int(v * op)))
+    return img
 
 
 # ---------------------------------------------------------------- emotions
@@ -999,6 +1051,396 @@ def wake(i, n):
     return p
 
 
+# ---- wave 2: variety
+
+def tail_wag(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.8)
+    wag = ramp(t, 0.05, 0.15) * (1 - ramp(t, 0.85, 0.97))
+    p["tail"] = 24 * math.sin(2 * math.pi * t * 6) * wag + 4 * math.sin(2 * math.pi * t)
+    p["lean"] = -1.6 * math.sin(2 * math.pi * t * 6) * wag
+    p["head_tilt"] = 5 * wag
+    p["look"] = (0.9 * wag, 0.0)
+    p["ear_out"] = 6 * wag
+    p["eyes"] = "happy" if 0.2 < t < 0.8 else "open"
+    p["mouth"] = "open" if 0.2 < t < 0.8 else "w"
+    p["mouth_open"] = 0.6
+    p["blush"] = 0.5 + 0.3 * wag
+    return p
+
+
+def stretch(i, n):
+    t = i / n
+    p = default_pose()
+    up = ramp(t, 0.1, 0.32) * (1 - ramp(t, 0.72, 0.9))
+    shiver = math.sin(i * 2.1) * bump(t, 0.34, 0.68)
+    p["sy"] = 1 + 0.09 * up - 0.04 * bump(t, 0.84, 0.96)
+    p["sx"] = 1 - 0.04 * up
+    p["head_dy"] = -2 * up
+    p["head_tilt"] = 1.5 * shiver
+    p["ear_out"] = -8 * up
+    p["ear_scale"] = 1 + 0.06 * up
+    if up > 0.02:
+        p["arm"] = [dict(side=-1, x=lerp(42, 18, up), y=lerp(108, 54, up) + shiver),
+                    dict(side=1, x=lerp(86, 108, up), y=lerp(108, 54, up) - shiver)]
+    p["eyes"] = "closed" if up > 0.3 else "open"
+    p["open"] = 1 - bump(t, 0.9, 0.98)
+    p["mouth"] = "yawn" if up > 0.3 else "w"
+    p["mouth_open"] = 0.6 * up
+    p["tail"] = 10 * up + 4 * math.sin(2 * math.pi * t)
+    p["blush"] = 0.5
+    sp = _floating(t, "sparkle", 104, 26, rise=6, delay=0.74, life=0.25, size=0.9, drift=0)
+    p["extras"] = [sp] if sp else []
+    return p
+
+
+def shake(i, n):
+    t = i / n
+    p = default_pose()
+    sh = bump(t, 0.12, 0.72)
+    wob = math.sin(2 * math.pi * t * 9)
+    p["lean"] = 8 * wob * sh
+    p["head_tilt"] = -10 * wob * sh
+    p["dx"] = 1.5 * wob * sh
+    p["sx"] = 1 + 0.04 * sh
+    p["sy"] = 1 - 0.03 * sh
+    p["ear_l"] = 18 * wob * sh
+    p["ear_r"] = 18 * wob * sh
+    p["tail"] = 18 * math.sin(2 * math.pi * t * 9 + 1) * sh
+    p["eyes"] = "closed" if 0.14 < t < 0.74 else "open"
+    p["open"] = 1 - bump(t, 0.8, 0.88)
+    p["mouth"] = "w"
+    p["blush"] = 0.4
+    ex = []
+    for k, (ang, d) in enumerate(((-150, 0.2), (-30, 0.28), (-110, 0.38), (-60, 0.46), (-170, 0.54), (-10, 0.6))):
+        ph = (t - d) / 0.25
+        if 0 < ph < 1:
+            r = math.radians(ang)
+            dist = 34 + 22 * ph
+            ex.append(dict(kind="drop", x=64 + dist * math.cos(r), y=68 + dist * math.sin(r) + 10 * ph * ph,
+                           scale=0.8, rot=ang + 90, opacity=1 - ramp(ph, 0.6, 1.0)))
+    p["extras"] = ex
+    return p
+
+
+def tail_play(i, n):
+    t = i / n
+    p = default_pose()
+    # notice the tail → pounce → it slips away → pounce again → pleased
+    notice = ramp(t, 0.04, 0.14) * (1 - ramp(t, 0.86, 0.96))
+    hops = [(0.18, 0.38), (0.48, 0.68)]
+    h = 0.0
+    for a, b in hops:
+        if a < t < b:
+            h = math.sin(math.pi * (t - a) / (b - a))
+    reach = max(bump(t, 0.2, 0.42), bump(t, 0.5, 0.72))
+    escape = 22 * math.sin(2 * math.pi * t * 3) * (1 - ramp(t, 0.8, 0.95))
+    p["dy"] = -5 * h
+    p["sy"] = 1 + 0.05 * h - 0.07 * (bump(t, 0.36, 0.44) + bump(t, 0.66, 0.74))
+    p["lean"] = 5 * notice + 3 * reach
+    p["head_tilt"] = 12 * notice
+    p["look"] = (1.4 * notice, 0.9 * notice)
+    p["tail"] = escape - 8 * reach
+    p["tail_curl"] = 0.4 * reach
+    if reach > 0.05:
+        p["arm"] = dict(side=1, x=lerp(86, 100, reach), y=lerp(108, 78, reach))
+    p["eyes"] = "happy" if t > 0.78 else "open"
+    p["open"] = 1.0
+    p["mouth"] = "open" if (reach > 0.3 or t > 0.78) else "w"
+    p["mouth_open"] = 0.7
+    p["blush"] = 0.6
+    ex = []
+    for sx_, sy_, d in ((104, 34, 0.38), (26, 30, 0.8)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=6, delay=d, life=0.2, size=0.9, drift=0, rot=60 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def surprise(i, n):
+    t = i / n
+    p = default_pose()
+    jolt = bump(t, 0.08, 0.3)
+    held = ramp(t, 0.1, 0.18) * (1 - ramp(t, 0.66, 0.86))
+    p["dy"] = -4 * jolt
+    p["sy"] = 1 + 0.06 * jolt - 0.05 * bump(t, 0.28, 0.4)
+    p["sx"] = 1 - 0.03 * jolt
+    p["ear_out"] = -10 * held
+    p["ear_scale"] = 1 + 0.12 * held
+    p["tail"] = -6 * held + 4 * math.sin(2 * math.pi * t)
+    p["tail_curl"] = 0.5 * held
+    p["eyes"] = "wide" if held > 0.3 else "open"
+    p["open"] = 1 - bump(t, 0.88, 0.96)
+    p["look"] = (0.0, -0.3 * held)
+    p["mouth"] = "o" if held > 0.3 else "w"
+    p["blush"] = 0.35
+    ex = []
+    sh = held * (1 + 0.3 * bump(t, 0.1, 0.24))
+    if sh > 0.02:
+        ex.append(dict(kind="shock", x=26, y=26, scale=0.7 * sh, opacity=min(1.0, held * 2)))
+        ex.append(dict(kind="shock", x=102, y=26, scale=0.7 * sh, opacity=min(1.0, held * 2), angles=(-30, -60, -90)))
+    p["extras"] = ex
+    return p
+
+
+def bounce(i, n):
+    t = i / n
+    p = default_pose()
+    hops = [(0.04, 0.3, 9), (0.34, 0.58, 7), (0.62, 0.8, 4)]
+    h, land = 0.0, 0.0
+    for a, b, height in hops:
+        if a < t < b:
+            h = math.sin(math.pi * (t - a) / (b - a)) * height / 9
+        land += bump(t, b - 0.05, b + 0.05)
+    p["dy"] = -9 * h
+    p["sy"] = 1 + 0.08 * h - 0.12 * land
+    p["sx"] = 1 - 0.04 * h + 0.07 * land
+    p["ear_out"] = -10 * h + 8 * land
+    p["tail"] = 20 * math.sin(2 * math.pi * t * 3) * (1 - ramp(t, 0.82, 1.0))
+    p["eyes"] = "happy" if t < 0.84 else "open"
+    p["mouth"] = "open" if t < 0.82 else "w"
+    p["mouth_open"] = 1.0
+    p["blush"] = 0.8
+    ex = []
+    for sx_, sy_, d in ((22, 40, 0.06), (104, 30, 0.2), (30, 76, 0.38), (100, 70, 0.52)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=8, delay=d, life=0.35, size=1.0, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def laugh(i, n):
+    t = i / n
+    p = default_pose()
+    lg = ramp(t, 0.04, 0.12) * (1 - ramp(t, 0.82, 0.94))
+    beat = abs(math.sin(2 * math.pi * t * 5))
+    p["sy"] = 1 - 0.05 * beat * lg
+    p["sx"] = 1 + 0.03 * beat * lg
+    p["head_dy"] = -1.5 * beat * lg
+    p["head_tilt"] = -8 * lg
+    p["lean"] = -3 * lg
+    p["ear_out"] = 8 * lg
+    p["tail"] = 16 * math.sin(2 * math.pi * t * 4) * lg
+    if lg > 0.05:
+        p["arm"] = dict(side=1, x=lerp(86, 76, lg), y=lerp(108, 100 - 2 * beat, lg))  # holds its belly
+    p["eyes"] = "happy" if lg > 0.2 else "open"
+    p["mouth"] = "open" if lg > 0.2 else "w"
+    p["mouth_open"] = 0.6 + 0.4 * beat
+    p["blush"] = 0.5 + 0.45 * lg
+    ex = []
+    for k, d in enumerate((0.3, 0.55)):
+        f = _floating(t, "drop", 38 if k == 0 else 90, 60, rise=-10, delay=d, life=0.3, size=0.6, drift=0)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((104, 30, 0.12), (24, 34, 0.42)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=6, delay=d, life=0.3, size=0.9, drift=0, rot=60 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def shy(i, n):
+    t = i / n
+    p = default_pose()
+    cover = ramp(t, 0.06, 0.2) * (1 - ramp(t, 0.82, 0.95))
+    peek = bump(t, 0.42, 0.62)                     # the right paw slides down for a peek
+    p["sy"] = 1 - 0.04 * cover
+    p["head_dy"] = 2 * cover
+    p["head_tilt"] = -6 * cover + 3 * math.sin(2 * math.pi * t * 2) * cover
+    p["ear_out"] = 16 * cover
+    p["ear_scale"] = 1 - 0.08 * cover
+    p["tail"] = 10 * math.sin(2 * math.pi * t * 2) * cover - 6 * cover
+    p["tail_curl"] = 0.5 * cover
+    if cover > 0.02:
+        p["arm"] = [dict(side=-1, x=lerp(42, 47, cover), y=lerp(108, 62, cover)),
+                    dict(side=1, x=lerp(86, 81, cover), y=lerp(108, 62 + 14 * peek, cover))]
+    p["eyes"] = "open" if peek > 0.4 else "closed"
+    p["look"] = (0.6, 0.4)
+    p["mouth"] = "w"
+    p["blush"] = 0.5 + 0.5 * cover
+    ex = []
+    for k, (hx, hy, d) in enumerate(((104, 40, 0.18), (24, 36, 0.5))):
+        f = _floating(t, "heart", hx, hy, rise=20, delay=d, life=0.4, size=0.6)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def music_spin(i, n):
+    t = i / n
+    beat = (i % 15) / 15
+    p = default_pose()
+    spin = ramp(t, 0.16, 0.64)                     # one full turn
+    turn = math.cos(2 * math.pi * spin)
+    p["sx"] = turn if abs(turn) > 0.08 else math.copysign(0.08, turn)
+    hop = math.sin(math.pi * clamp((t - 0.14) / 0.52)) if 0.14 < t < 0.66 else 0
+    p["dy"] = -6 * hop
+    pulse = math.exp(-beat * 6) * (1 - hop)
+    p["sy"] = 1 + 0.05 * hop - 0.05 * pulse - 0.08 * bump(t, 0.62, 0.74)
+    p["ear_out"] = -6 * hop
+    p["tail"] = 14 * math.sin(4 * math.pi * t) * (1 - hop)
+    p["eyes"] = "happy"
+    p["mouth"] = "open"
+    p["mouth_open"] = 0.6 + 0.3 * pulse
+    p["blush"] = 0.7
+    ex = _notes(t, 3, 100, 112, 1, NOTE_COLORS)
+    wh = bump(t, 0.18, 0.62)
+    if wh > 0:
+        ex.append(dict(kind="whoosh", x=18, y=78, scale=0.9, opacity=wh))
+    p["extras"] = ex
+    return p
+
+
+def music_paws(i, n):
+    t = i / n
+    beat = (i % 15) / 15
+    p = default_pose()
+    pulse = math.exp(-beat * 6)
+    side = 1 if (i // 15) % 2 == 0 else -1          # the paws take turns on every beat
+    up = math.sin(math.pi * beat)
+    p["sy"] = 1 - 0.04 * pulse
+    p["sx"] = 1 + 0.025 * pulse
+    p["lean"] = 3 * side * up
+    p["head_tilt"] = -5 * side * up
+    p["ear_l"] = 5 * side * up
+    p["ear_r"] = 5 * side * up
+    p["tail"] = -12 * side * up
+    hi, lo = (lerp(108, 58, up), 104)
+    p["arm"] = [dict(side=-1, x=26 if side < 0 else 40, y=hi if side < 0 else lo),
+                dict(side=1, x=102 if side > 0 else 88, y=hi if side > 0 else lo)]
+    p["eyes"] = "happy"
+    p["mouth"] = "open" if up > 0.4 else "w"
+    p["mouth_open"] = 0.5 + 0.4 * up
+    p["blush"] = 0.7
+    p["extras"] = _notes(t, 2, 100, 112, 1, NOTE_COLORS) + _notes((t + 0.5) % 1, 2, 26, 14, -1, NOTE_COLORS[::-1])
+    return p
+
+
+def drowsy(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 1.3)
+    nod = bump(t, 0.16, 0.46)                      # head sinks, then jerks back up
+    jerk = bump(t, 0.44, 0.52)
+    y = bump(t, 0.58, 0.9)                         # small yawn
+    p["head_dy"] = 3 * nod - 1.5 * jerk
+    p["head_tilt"] = 6 * nod
+    p["ear_out"] = 10 + 6 * nod - 8 * jerk
+    p["ear_scale"] = 0.96
+    p["eyes"] = "closed" if (nod > 0.6 or 0.62 < t < 0.86) else "open"
+    p["open"] = 0.42 - 0.2 * nod + 0.5 * jerk
+    p["mouth"] = "yawn" if 0.6 < t < 0.88 else "w"
+    p["mouth_open"] = 0.6 * y
+    p["blush"] = 0.4
+    p["tail"] = 3 * math.sin(2 * math.pi * t)
+    ex = []
+    z = _floating(t, "zzz", 98, 40, rise=16, delay=0.12, life=0.4, size=0.7)
+    if z:
+        ex.append(z)
+    if jerk > 0.1:
+        ex.append(dict(kind="shock", x=26, y=26, scale=0.6, opacity=jerk))
+    p["extras"] = ex
+    return p
+
+
+def _turn(side):
+    """The car turns left (side=-1) or right (side=1); the fox is thrown the other way."""
+    def pose(i, n):
+        t = i / n
+        p = default_pose()
+        throw = ramp(t, 0.02, 0.14) * (1 - ramp(t, 0.5, 0.78))
+        wob = math.sin(2 * math.pi * (t - 0.5) * 3) * bump(t, 0.5, 0.95)
+        lean = -side * 9 * throw + -side * 3 * wob
+        p["lean"] = lean
+        p["dx"] = -side * 5 * throw
+        p["head_tilt"] = -side * 6 * throw
+        p["ear_l"] = side * 14 * throw
+        p["ear_r"] = side * 14 * throw
+        p["tail"] = side * 16 * throw
+        p["tail_curl"] = 0.6 * throw
+        p["sx"] = 1 + 0.04 * throw
+        p["eyes"] = "wide" if t < 0.6 else "open"
+        p["look"] = (side * 0.8 * throw, 0.0)
+        p["open"] = 1 - bump(t, 0.8, 0.88)
+        p["mouth"] = "o" if t < 0.6 else "w"
+        p["blush"] = 0.3
+        ex = []
+        wh = bump(t, 0.02, 0.5)
+        if wh > 0:
+            ex.append(dict(kind="whoosh", x=64 + side * 46, y=66, scale=0.9, opacity=wh))
+        sw = clamp((t - 0.2) / 0.6)
+        if 0 < sw < 1:
+            ex.append(dict(kind="sweat", x=64 - side * 40, y=36 + 10 * sw, scale=0.9,
+                           opacity=ramp(sw, 0, 0.1) * (1 - ramp(sw, 0.75, 1.0))))
+        p["extras"] = ex
+        return p
+    return pose
+
+
+turn_left = _turn(-1)
+turn_right = _turn(1)
+
+
+def phone_call(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6, cycles=2)
+    talk = (i // 6) % 2 == 0 and not 0.55 < t < 0.8   # listens for a while, then talks again
+    nod = bump(t, 0.6, 0.68) + bump(t, 0.7, 0.78)
+    p["head_tilt"] = 9 + 2 * nod
+    p["head_dy"] = 1.5 * nod
+    p["ear_r"] = -4
+    p["ear_l"] = 6 * bump(t, 0.3, 0.36)
+    p["arm"] = dict(side=1, x=96, y=62)
+    p["eyes"] = "open"
+    p["open"] = 1 - bump(t, 0.4, 0.46)
+    p["look"] = (-0.6, 0.0)
+    p["mouth"] = "open" if talk else "w"
+    p["mouth_open"] = 0.45
+    p["blush"] = 0.5
+    p["tail"] = 5 * math.sin(2 * math.pi * t)
+    ex = [dict(kind="phone", x=98, y=56, scale=1.0, rot=12)]
+    w = 0.5 + 0.5 * math.sin(2 * math.pi * t * 4)
+    if talk:
+        ex.append(dict(kind="waves", x=112, y=46, scale=0.8, opacity=0.4 + 0.6 * w))
+    p["extras"] = ex
+    return p
+
+
+def low_battery(i, n):
+    t = i / n
+    p = default_pose()
+    worry = ramp(t, 0.04, 0.16) * (1 - ramp(t, 0.84, 0.96))
+    sag = bump(t, 0.3, 0.8)
+    p["sy"] = 1 - 0.05 * worry - 0.03 * sag
+    p["sx"] = 1 + 0.03 * worry
+    p["head_dy"] = 2.5 * worry
+    p["head_tilt"] = -5 * worry
+    p["ear_out"] = 18 * worry
+    p["ear_scale"] = 1 - 0.1 * worry
+    p["tail"] = -10 * worry
+    p["tail_curl"] = 0.3 * worry
+    p["eyes"] = "open"
+    p["open"] = 1 - 0.45 * worry - bump(t, 0.5, 0.58) * 0.5
+    p["look"] = (0.6 * worry, -0.9 * worry)
+    p["mouth"] = "frown" if worry > 0.3 else "w"
+    p["blush"] = 0.25
+    blink = 0.25 + 0.75 * (1 if (i // 6) % 2 == 0 else 0)
+    ex = [dict(kind="battery", x=98, y=24, scale=ramp(t, 0.02, 0.12) * (1 + 0.15 * bump(t, 0.06, 0.18)),
+               level=0.15, blink=blink, opacity=1 - ramp(t, 0.86, 0.96))]
+    sw = clamp((t - 0.2) / 0.6)
+    if 0 < sw < 1:
+        ex.append(dict(kind="sweat", x=26, y=38 + 10 * sw, scale=0.9,
+                       opacity=ramp(sw, 0, 0.1) * (1 - ramp(sw, 0.75, 1.0))))
+    p["extras"] = ex
+    return p
+
+
 EMOTIONS = {
     # file suffix: (pose function, frame count)
     "idle_small": (idle_small, 60),
@@ -1022,6 +1464,22 @@ EMOTIONS = {
     "fall_asleep": (fall_asleep, 60),
     "sleep": (sleep, 75),
     "wake": (wake, 45),
+    # wave 2
+    "tail_wag": (tail_wag, 50),
+    "stretch": (stretch, 60),
+    "shake": (shake, 45),
+    "tail_play": (tail_play, 70),
+    "surprise": (surprise, 40),
+    "bounce": (bounce, 50),
+    "laugh": (laugh, 50),
+    "shy": (shy, 60),
+    "music_spin": (music_spin, 60),
+    "music_paws": (music_paws, 60),
+    "drowsy": (drowsy, 60),
+    "turn_left": (turn_left, 40),
+    "turn_right": (turn_right, 40),
+    "phone_call": (phone_call, 72),
+    "low_battery": (low_battery, 55),
 }
 
 
