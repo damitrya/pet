@@ -240,6 +240,7 @@ def default_pose():
         tail=0.0, tail_curl=0.0,
         eyes="open", open=1.0, look=(0.0, 0.0),
         mouth="w", mouth_open=1.0, blush=0.5,
+        arm=None,  # raised front paw: dict(side=-1|1, x=.., y=..) — paw position, body space
         extras=[],
     )
 
@@ -343,6 +344,9 @@ def draw_character(pose):
 
     draw_mouth(cv, pose, head_tf)
 
+    if pose["arm"]:
+        draw_arm(cv, pose["arm"], body_tf)
+
     out = cv.outlined(1.4)
     for extra in pose["extras"]:
         draw_extra(out, extra)
@@ -372,6 +376,15 @@ def draw_eyes(cv, pose, tf):
         elif kind == "closed":
             arc = bezier((ex - 6.5, ey), (ex, ey + 5.5), (ex + 6.5, ey), 14)
             cv.paint(Canvas.stroke_mask(arc, 2.2, tf), DARK)
+        elif kind == "grumpy":
+            # lower half of the eye under a lid slanting down toward the nose
+            lid_out, lid_in = ey - 1.5, ey + 1.8
+            lid = [(ex - side * 8, lid_out), (ex + side * 8, lid_in)]
+            below = Canvas.poly_mask([lid[0], lid[1], (ex + side * 8, ey + 12), (ex - side * 8, ey + 12)], tf)
+            eye_mask = clip(Canvas.poly_mask(ellipse_pts(ex, ey + 1, 6.3, 7.5), tf), below)
+            cv.paint(eye_mask, DARK)
+            cv.paint(clip(Canvas.poly_mask(ellipse_pts(ex + 1.6, ey + 3.2, 1.7, 1.7), tf), eye_mask), WHITE)
+            cv.paint(Canvas.stroke_mask([(ex - side * 7.5, lid_out - 0.5), (ex + side * 7.5, lid_in - 0.5)], 2.2, tf), DARK)
         elif kind == "wide":
             white = Canvas.poly_mask(ellipse_pts(ex, ey, 8, 9), tf)
             cv.paint(Canvas.poly_mask(ellipse_pts(ex, ey, 9.2, 10.2), tf), DARK)
@@ -397,9 +410,33 @@ def draw_mouth(cv, pose, tf):
         for side in (-1, 1):
             arc = bezier((64, 75.5), (64 + side * 1.5, 78), (64 + side * 5.5, 77.5), 8)
             cv.paint(Canvas.stroke_mask(arc, 1.4, tf), DARK)
+    elif kind == "yawn":
+        k = clamp(pose["mouth_open"], 0.0, 1.0)
+        if k < 0.1:
+            draw_mouth(cv, dict(pose, mouth="w"), tf)
+            return
+        m = Canvas.poly_mask(ellipse_pts(64, 79 + 3 * k, 4 + 3.5 * k, 2 + 6.5 * k), tf)
+        cv.paint(m, MOUTH)
+        cv.paint(clip(Canvas.poly_mask(ellipse_pts(64, 81 + 7 * k, 4.5 * k, 3 * k), tf), m), TONGUE)
+    elif kind == "frown":
+        arc = bezier((58.5, 81), (64, 76.5), (69.5, 81), 12)
+        cv.paint(Canvas.stroke_mask(arc, 1.6, tf), DARK)
     elif kind == "o":
         cv.paint(Canvas.poly_mask(ellipse_pts(64, 80.5, 3.6, 4.4), tf), MOUTH)
         cv.paint(Canvas.poly_mask(ellipse_pts(64, 82.5, 2.2, 1.6), tf), TONGUE)
+
+
+def draw_arm(cv, arm, tf):
+    """Raised front paw: an orange limb from the shoulder with a dark paw at the end."""
+    side = arm["side"]
+    shoulder = (64 + side * 20, 101)
+    paw = (arm["x"], arm["y"])
+    elbow = (lerp(shoulder[0], paw[0], 0.5) + side * 6, lerp(shoulder[1], paw[1], 0.5) + 2)
+    limb = bezier(shoulder, elbow, paw, 16)
+    cv.paint(Canvas.stroke_mask(limb, 11.5, tf), OUTLINE)
+    cv.paint(Canvas.stroke_mask(limb, 8.5, tf), ORANGE_TOP)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.8, 6.0), tf), OUTLINE)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 5.4, 4.7), tf), PAW)
 
 
 # ---------------------------------------------------------------- extras
@@ -450,6 +487,30 @@ def draw_extra(img, e):
             strokes.append(([(x + r0 * math.cos(r), y + r0 * math.sin(r)),
                              (x + r1 * math.cos(r), y + r1 * math.sin(r))], 1.8))
         layer = _sticker([], (240, 60, 50), strokes, opacity=op, out_px=1.0)
+    elif kind == "zzz":
+        h = 4.5 * s
+        strokes = [([(x - h, y - h), (x + h, y - h), (x - h, y + h), (x + h, y + h)], 2.0 * s)]
+        layer = _sticker([], (90, 110, 210), strokes, opacity=op)
+    elif kind == "question":
+        hook = bezier((x - 4 * s, y - 9 * s), (x + 6 * s, y - 16 * s), (x + 4 * s, y - 5 * s), 12)
+        hook += bezier((x + 4 * s, y - 5 * s), (x, y - 2 * s), (x, y + 1.5 * s), 8)[1:]
+        dot = ellipse_pts(x, y + 6 * s, 1.9 * s, 1.9 * s)
+        layer = _sticker([dot], (90, 110, 210), [(hook, 2.4 * s)], opacity=op, out_px=1.4)
+    elif kind == "anger":
+        strokes = []
+        for qx, qy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            a = (x + qx * 2 * s, y + qy * 6.5 * s)
+            b = (x + qx * 6.5 * s, y + qy * 2 * s)
+            strokes.append((bezier(a, (x + qx * 2 * s, y + qy * 2 * s), b, 8), 2.2 * s))
+        layer = _sticker([], (232, 48, 48), strokes, opacity=op, out_px=1.2)
+    elif kind == "puff":
+        blobs = [ellipse_pts(x + dx * s, y + dy * s, r * s, r * s)
+                 for dx, dy, r in ((0, 0, 4.5), (5, -2, 3.8), (-4.5, -1.5, 3.4), (2, -5, 3.4))]
+        layer = _sticker(blobs, (240, 244, 252), outline=(150, 160, 185), opacity=op, out_px=0.9)
+    elif kind == "whoosh":
+        strokes = [([(x - 7 * s + dx, y + dy), (x + 7 * s + dx, y + dy)], 1.8)
+                   for dx, dy in ((0, -7 * s), (-5 * s, 0), (2 * s, 7 * s))]
+        layer = _sticker([], (150, 165, 195), strokes, opacity=op, out_px=0.8)
     else:
         return
     img.alpha_composite(layer)
@@ -645,6 +706,299 @@ def pet(i, n):
     return p
 
 
+# ---- wave 1: idle variants, interaction, events
+
+def _floating(t, kind, x, y, rise=26, delay=0.0, life=0.6, size=1.0, drift=3.0, **kw):
+    """One sticker that pops in at `delay`, floats up by `rise` and fades out within `life`."""
+    ph = (t - delay) / life
+    if not 0 < ph < 1:
+        return None
+    return dict(kind=kind, x=x + drift * math.sin(ph * 2 * math.pi), y=y - rise * ph,
+                scale=size * (0.6 + 0.5 * smooth(min(1.0, ph * 2.5))),
+                opacity=ramp(ph, 0, 0.12) * (1 - ramp(ph, 0.7, 1.0)), **kw)
+
+
+def _zzz(t, cycles=1):
+    out = []
+    for k in range(3):
+        ph = (t * cycles + k / 3) % 1.0
+        out.append(dict(kind="zzz", x=96 + 10 * ph + 2 * math.sin(ph * 6), y=40 - 30 * ph,
+                        scale=0.55 + 0.5 * ph, opacity=ramp(ph, 0, 0.15) * (1 - ramp(ph, 0.75, 1.0))))
+    return out
+
+
+def yawn(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    y = bump(t, 0.12, 0.78)                    # whole yawn
+    wide = bump(t, 0.2, 0.7)
+    p["sy"] *= 1 + 0.06 * wide
+    p["sx"] *= 1 - 0.03 * wide
+    p["head_tilt"] = -5 * wide
+    p["head_dy"] = -1.5 * wide
+    p["ear_out"] = 10 * y
+    p["ear_scale"] = 1 - 0.06 * y
+    p["eyes"] = "closed" if 0.18 < t < 0.76 else "open"
+    p["open"] = 1 - bump(t, 0.82, 0.92)
+    p["mouth"] = "yawn"
+    p["mouth_open"] = wide
+    p["tail"] = 6 * math.sin(2 * math.pi * t)
+    p["blush"] = 0.4
+    tear = _floating(t, "sweat", 39, 56, rise=-6, delay=0.55, life=0.35, size=0.55, drift=0)
+    p["extras"] = [tear] if tear else []
+    return p
+
+
+def ear_scratch(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    up = ramp(t, 0.06, 0.2) * (1 - ramp(t, 0.8, 0.94))
+    scratch = math.sin(2 * math.pi * t * 9) * ramp(t, 0.2, 0.26) * (1 - ramp(t, 0.74, 0.8))
+    p["head_tilt"] = 10 * up
+    p["lean"] = 3 * up
+    p["ear_r"] = -6 * up + 7 * scratch
+    p["arm"] = dict(side=1, x=lerp(84, 92 + 2 * scratch, up), y=lerp(110, 38 + 4 * scratch, up)) if up > 0.02 else None
+    p["eyes"] = "closed" if up > 0.6 else "open"
+    p["mouth"] = "w"
+    p["blush"] = 0.5 + 0.3 * up
+    p["tail"] = 8 * math.sin(2 * math.pi * t * 2) * up
+    return p
+
+
+def music_nod(i, n):
+    t = i / n
+    beat = (i % 15) / 15
+    p = default_pose()
+    nod = math.exp(-beat * 5)
+    p["head_dy"] = 4 * nod
+    p["head_tilt"] = 3 * math.sin(2 * math.pi * t * 2)
+    p["sy"] = 1 - 0.04 * nod
+    p["sx"] = 1 + 0.025 * nod
+    p["ear_out"] = -4 * nod
+    p["ear_scale"] = 1 + 0.05 * nod
+    p["tail"] = 14 * math.sin(2 * math.pi * t * 4)
+    p["eyes"] = "closed"
+    p["mouth"] = "w"
+    p["blush"] = 0.65
+    p["extras"] = _notes(t, 2, 100, 112, 1, NOTE_COLORS) + _notes((t + 0.5) % 1, 2, 26, 14, -1, NOTE_COLORS[::-1])
+    return p
+
+
+def head_tilt(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    tilt = ramp(t, 0.06, 0.24) * (1 - ramp(t, 0.78, 0.96))
+    p["head_tilt"] = 16 * tilt
+    p["ear_l"] = -10 * tilt
+    p["ear_r"] = 6 * tilt
+    p["look"] = (0.5 * tilt, -0.8 * tilt)
+    p["eyes"] = "open"
+    p["open"] = 1 + 0.1 * tilt - bump(t, 0.5, 0.58)
+    p["mouth"] = "o" if 0.28 < t < 0.7 else "w"
+    p["tail"] = 6 * math.sin(2 * math.pi * t)
+    q = tilt * (1 + 0.25 * bump(t, 0.18, 0.34))
+    p["extras"] = [dict(kind="question", x=104, y=26, scale=q, opacity=min(1.0, tilt * 1.5))]
+    return p
+
+
+def annoyed(i, n):
+    t = i / n
+    p = default_pose()
+    huff = bump(t, 0.0, 0.18)
+    stomp = math.sin(i * 1.9) * bump(t, 0.05, 0.45)
+    puff = ramp(t, 0.1, 0.25) * (1 - ramp(t, 0.8, 0.95))
+    p["sy"] = 1 - 0.08 * huff
+    p["sx"] = 1 + 0.06 * huff + 0.02 * puff
+    p["dx"] = 1.5 * stomp
+    p["head_tilt"] = -6 * puff
+    p["ear_out"] = 16 * puff
+    p["ear_scale"] = 1 - 0.1 * puff
+    p["tail"] = -14 * puff + 10 * math.sin(i * 0.9) * puff
+    p["eyes"] = "grumpy" if t < 0.88 else "open"
+    p["look"] = (-0.8 * puff, 0)
+    p["mouth"] = "frown" if t < 0.88 else "w"
+    p["blush"] = 0.85 * puff
+    pulse = 1 + 0.18 * math.sin(i * 0.8)
+    ex = [dict(kind="anger", x=100, y=28, scale=ramp(t, 0.04, 0.14) * pulse, opacity=1 - ramp(t, 0.78, 0.9))]
+    for k, d in enumerate((0.15, 0.4)):
+        f = _floating(t, "puff", 30 - 6 * k, 80, rise=10, delay=d, life=0.35, size=0.8, drift=-4)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def hearts(i, n):
+    t = i / n
+    p = default_pose()
+    hop = math.sin(math.pi * clamp((t - 0.05) / 0.3)) if 0.05 < t < 0.35 else 0
+    p["dy"] = -5 * hop
+    p["sy"] = 1 + 0.04 * hop - 0.06 * bump(t, 0.33, 0.45)
+    p["ear_out"] = 8
+    p["head_tilt"] = 6 * math.sin(2 * math.pi * t)
+    p["tail"] = 18 * math.sin(2 * math.pi * t * 3)
+    p["eyes"] = "happy"
+    p["mouth"] = "open" if t < 0.6 else "w"
+    p["mouth_open"] = 0.7
+    p["blush"] = 0.95
+    ex = []
+    for k, (hx, hy, d) in enumerate(((64, 30, 0.0), (100, 44, 0.12), (26, 42, 0.22), (84, 22, 0.34))):
+        f = _floating(t, "heart", hx, hy, rise=28, delay=d, life=0.6, size=0.9 if k == 0 else 0.7)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def relief(i, n):
+    t = i / n
+    p = default_pose()
+    sigh = bump(t, 0.05, 0.6)
+    p["sy"] = 1 + 0.04 * bump(t, 0.0, 0.2) - 0.07 * ramp(t, 0.2, 0.5) * (1 - ramp(t, 0.75, 1.0))
+    p["sx"] = 1 + 0.04 * ramp(t, 0.2, 0.5) * (1 - ramp(t, 0.75, 1.0))
+    p["head_dy"] = 2 * sigh
+    p["ear_out"] = 10 * sigh
+    p["eyes"] = "closed" if 0.12 < t < 0.7 else "open"
+    p["open"] = 0.7 + 0.3 * ramp(t, 0.7, 0.85)
+    p["mouth"] = "o" if 0.2 < t < 0.5 else "w"
+    p["blush"] = 0.5
+    p["tail"] = 5 * math.sin(2 * math.pi * t)
+    ex = []
+    f = _floating(t, "puff", 46, 82, rise=12, delay=0.22, life=0.5, size=0.9, drift=-6)
+    if f:
+        ex.append(f)
+    sw = 1 - ramp(t, 0.0, 0.45)
+    if sw > 0:
+        ex.append(dict(kind="sweat", x=24, y=46 + 6 * (1 - sw), scale=1.0, opacity=sw))
+    p["extras"] = ex
+    return p
+
+
+def greeting(i, n):
+    t = i / n
+    p = default_pose()
+    pop = ramp(t, 0.0, 0.18)
+    over = bump(t, 0.12, 0.28)
+    p["sy"] = 0.7 + 0.3 * pop + 0.06 * over
+    p["sx"] = 1.12 - 0.12 * pop - 0.03 * over
+    p["dy"] = 8 * (1 - pop)
+    raise_ = ramp(t, 0.18, 0.3) * (1 - ramp(t, 0.84, 0.96))
+    wave = math.sin(2 * math.pi * (t - 0.3) * 4) * ramp(t, 0.3, 0.36) * (1 - ramp(t, 0.78, 0.84))
+    if raise_ > 0.02:
+        p["arm"] = dict(side=-1, x=lerp(42, 20 + 5 * wave, raise_), y=lerp(110, 52 - 3 * abs(wave), raise_))
+    p["lean"] = 3 * wave * raise_
+    p["head_tilt"] = -6 * raise_
+    p["ear_out"] = -6 * over + 4 * raise_
+    p["tail"] = 16 * math.sin(2 * math.pi * t * 3)
+    p["eyes"] = "happy" if 0.2 < t < 0.85 else "open"
+    p["mouth"] = "open" if 0.2 < t < 0.85 else "w"
+    p["mouth_open"] = 0.8
+    p["blush"] = 0.7
+    ex = []
+    for sx_, sy_, d in ((104, 30, 0.2), (98, 66, 0.35)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=6, delay=d, life=0.4, size=1.0, drift=0, rot=60 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def trip_start(i, n):
+    t = i / n
+    p = default_pose()
+    hops = [(0.06, 0.34), (0.4, 0.68)]
+    h = 0.0
+    for a, b in hops:
+        if a < t < b:
+            h = math.sin(math.pi * (t - a) / (b - a))
+    land = bump(t, 0.32, 0.42) + bump(t, 0.66, 0.76)
+    p["dy"] = -7 * h
+    p["sy"] = 1 + 0.06 * h - 0.1 * land
+    p["sx"] = 1 - 0.03 * h + 0.06 * land
+    p["lean"] = -4 * h
+    p["ear_out"] = -8 * h + 6 * land
+    p["tail"] = 22 * math.sin(2 * math.pi * t * 3) * (1 - ramp(t, 0.8, 1.0))
+    p["eyes"] = "happy" if t < 0.82 else "open"
+    p["mouth"] = "open" if t < 0.8 else "w"
+    p["mouth_open"] = 1.0
+    p["blush"] = 0.8
+    ex = []
+    wh = bump(t, 0.05, 0.75)
+    if wh > 0:
+        ex.append(dict(kind="whoosh", x=18, y=92, scale=1.0, opacity=wh))
+    for sx_, sy_, d in ((22, 30, 0.08), (106, 24, 0.2), (100, 64, 0.42)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=6, delay=d, life=0.4, size=1.1, drift=0, rot=80 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def fall_asleep(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 1.2)
+    # two drowsy head drops, the second one stays down
+    drop1 = bump(t, 0.15, 0.45)
+    drop2 = ramp(t, 0.55, 0.8)
+    d = max(drop1 * 0.6, drop2)
+    p["head_dy"] = 3 * d
+    p["head_tilt"] = 7 * d
+    p["ear_out"] = 16 * ramp(t, 0.1, 0.8)
+    p["ear_scale"] = 1 - 0.06 * ramp(t, 0.1, 0.8)
+    p["sy"] *= 1 - 0.03 * drop2
+    p["eyes"] = "open" if t < 0.6 else "closed"
+    p["open"] = 0.6 - 0.35 * drop1 + 0.15 * (1 - ramp(t, 0.0, 0.1))
+    p["mouth"] = "w"
+    p["blush"] = 0.45
+    p["tail"] = 4 * math.sin(2 * math.pi * t) * (1 - drop2)
+    p["extras"] = [z for z in _zzz(t * 0.5) if t > 0.78]
+    return p
+
+
+def sleep(i, n):
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 2.0)
+    p["head_dy"] = 3 + 0.8 * math.sin(2 * math.pi * t)
+    p["head_tilt"] = 7
+    p["ear_out"] = 16
+    p["ear_scale"] = 0.94
+    p["ear_r"] = 6 * bump(t, 0.6, 0.66)          # a twitch in its sleep
+    p["sy"] *= 0.97
+    p["eyes"] = "closed"
+    p["mouth"] = "w"
+    p["blush"] = 0.45
+    p["tail"] = 3 * math.sin(2 * math.pi * t)
+    p["extras"] = _zzz(t)
+    return p
+
+
+def wake(i, n):
+    t = i / n
+    p = default_pose()
+    up = ramp(t, 0.15, 0.4)
+    stretch = bump(t, 0.3, 0.7)
+    p["head_dy"] = 3 * (1 - up)
+    p["head_tilt"] = 7 * (1 - up)
+    p["ear_out"] = 16 * (1 - up) - 6 * bump(t, 0.35, 0.55)
+    p["ear_scale"] = 0.94 + 0.06 * up + 0.06 * bump(t, 0.35, 0.55)
+    p["sy"] = 0.97 + 0.03 * up + 0.07 * stretch
+    p["sx"] = 1 - 0.03 * stretch
+    p["eyes"] = "closed" if t < 0.18 else "open"
+    p["open"] = 0.4 + 0.6 * ramp(t, 0.2, 0.45) - bump(t, 0.55, 0.65) * 0.9
+    p["mouth"] = "yawn" if 0.3 < t < 0.7 else "w"
+    p["mouth_open"] = stretch * 0.7
+    p["blush"] = 0.5
+    p["tail"] = 10 * math.sin(2 * math.pi * t * 2) * up
+    sp = _floating(t, "sparkle", 104, 34, rise=6, delay=0.7, life=0.3, size=0.9, drift=0)
+    p["extras"] = [sp] if sp else []
+    return p
+
+
 EMOTIONS = {
     # file suffix: (pose function, frame count)
     "idle_small": (idle_small, 60),
@@ -655,6 +1009,19 @@ EMOTIONS = {
     "tap": (tap, 40),
     "alert": (alert, 50),
     "pet": (pet, 48),
+    # wave 1
+    "yawn": (yawn, 60),
+    "ear_scratch": (ear_scratch, 60),
+    "music_nod": (music_nod, 60),
+    "head_tilt": (head_tilt, 45),
+    "annoyed": (annoyed, 50),
+    "hearts": (hearts, 40),
+    "relief": (relief, 40),
+    "greeting": (greeting, 50),
+    "trip_start": (trip_start, 50),
+    "fall_asleep": (fall_asleep, 60),
+    "sleep": (sleep, 75),
+    "wake": (wake, 45),
 }
 
 

@@ -12,6 +12,8 @@ import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
 import com.drivecompanion.data.SettingsRepository
+import com.drivecompanion.state.AnimationPools
+import com.drivecompanion.state.AnimationVariant
 import com.drivecompanion.state.CompanionState
 
 /**
@@ -37,12 +39,6 @@ class CharacterView @JvmOverloads constructor(
     private val settings = SettingsRepository(context)
 
     private var currentState: CompanionState? = null
-
-    /** Tracks which music track to play next (alternates between "music" and "music2"). */
-    private var useMusicTrack2 = false
-
-    /** Tracks which idle animation to play next (alternates between "idle_small" and "idle2"). */
-    private var useIdleTrack2 = false
 
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
@@ -85,18 +81,15 @@ class CharacterView @JvmOverloads constructor(
         playVideo(state)
     }
 
+    /**
+     * Plays the next variant from the state's [AnimationPools] pool.
+     * Looping states with several variants play one variant once and then pick the next one;
+     * single-variant looping states loop that file forever.
+     */
     private fun playVideo(state: CompanionState) {
-        var resName = state.rawVideoResName ?: return
-        val alternatingMusic = state == CompanionState.MUSIC
-        val alternatingIdle = state == CompanionState.CALM
-        if (alternatingMusic) {
-            resName = if (useMusicTrack2) "music2" else "music"
-            useMusicTrack2 = !useMusicTrack2
-        } else if (alternatingIdle) {
-            resName = if (useIdleTrack2) "idle2" else "idle_small"
-            useIdleTrack2 = !useIdleTrack2
-        }
-        val resId = resolveRawRes(resName)
+        val pool = AnimationPools.forState(state)
+        val variant = pool.pick { resolveVariant(it) != 0 }
+        val resId = variant?.let { resolveVariant(it) } ?: 0
         if (resId == 0) { setFallbackAnimation(state); return }
 
         val source = ImageDecoder.createSource(context.resources, resId)
@@ -105,14 +98,13 @@ class CharacterView @JvmOverloads constructor(
         imageView.visibility = View.VISIBLE
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
-            if (alternatingMusic || alternatingIdle) {
-                // Play once, then switch to the other track
+            if (state.isLooping && pool.variants.size > 1) {
+                // Play once, then pick the next variant
                 repeatCount = 0
-                val expectedState = state
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
                         post {
-                            if (currentState == expectedState) playVideo(state)
+                            if (currentState == state && imageView.drawable === d) playVideo(state)
                         }
                     }
                 })
@@ -121,13 +113,23 @@ class CharacterView @JvmOverloads constructor(
                 if (!state.isLooping) {
                     registerAnimationCallback(object : Animatable2.AnimationCallback() {
                         override fun onAnimationEnd(d: Drawable?) {
-                            post { oneShotAnimationEndListener?.invoke(state) }
+                            post {
+                                // Ignore a replaced drawable: the state was interrupted (or re-entered).
+                                if (imageView.drawable === d) oneShotAnimationEndListener?.invoke(state)
+                            }
                         }
                     })
                 }
             }
             start()
         }
+    }
+
+    /** Raw resource for the variant: its own file, else its fallback, else 0 (variant unavailable). */
+    private fun resolveVariant(variant: AnimationVariant): Int {
+        val id = resolveRawRes(variant.resName)
+        if (id != 0) return id
+        return variant.fallback?.let { resolveRawRes(it) } ?: 0
     }
 
     /**
