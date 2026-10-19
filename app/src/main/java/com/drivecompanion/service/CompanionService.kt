@@ -338,20 +338,14 @@ class CompanionService : Service(),
 
     private fun setInitialState() {
         overlayManager.getCharacterView()?.let { cv ->
-            cv.oneShotAnimationEndListener = { state ->
-                when (state) {
-                    CompanionState.BLINK -> stateMachine.onBlinkCompleted()
-                    CompanionState.TAP -> stateMachine.onTapCompleted()
-                    CompanionState.ALERT -> stateMachine.onAlertCompleted()
-                    else -> {}
-                }
-            }
+            cv.oneShotAnimationEndListener = { state -> stateMachine.onOneShotCompleted(state) }
             cv.setState(CompanionState.CALM)
         }
         overlayManager.onTapListener = { stateMachine.onTap() }
         overlayManager.onLongPressListener = { stateMachine.onLongPress() }
         overlayManager.onLongPressReleasedListener = { stateMachine.onLongPressReleased() }
         stateMachine.setProfile(profileManager.getCurrentProfile())
+        stateMachine.onOverlayShown()
     }
 
     private fun createNotificationChannel() {
