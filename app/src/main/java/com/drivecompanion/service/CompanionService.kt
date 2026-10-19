@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -96,6 +97,19 @@ class CompanionService : Service(),
     private lateinit var phoneCallProvider: PhoneCallProvider
     private lateinit var bluetoothTrigger: BluetoothTrigger
 
+    /**
+     * Applies profile changes made in SettingsActivity to the running service. Without it the
+     * service kept the profile it was created with, so "Auto" (GPS, braking) started only after
+     * a restart of the service.
+     */
+    private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        when (key) {
+            SettingsRepository.KEY_PROFILE_MODE, SettingsRepository.KEY_ACTIVE_PROFILE -> applyProfileSetting()
+            SettingsRepository.KEY_ALERT_BRAKING_THRESHOLD ->
+                accelerometerMonitor.setThreshold(settings.alertBrakingThreshold)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -134,6 +148,7 @@ class CompanionService : Service(),
 
         createNotificationChannel()
         profileManager.restoreProfile()
+        settings.registerChangeListener(settingsListener)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -177,6 +192,7 @@ class CompanionService : Service(),
     }
 
     override fun onDestroy() {
+        settings.unregisterChangeListener(settingsListener)
         stateMachine.destroy()
         stopProviders()
         overlayManager.hide()
@@ -249,6 +265,7 @@ class CompanionService : Service(),
 
     // SensorDataProvider.Listener
     override fun onDrivingDataChanged(data: DrivingData) {
+        if (data.hasGpsFix) accelerometerMonitor.updateSpeed(data.speedKmh)
         stateMachine.updateDrivingData(data)
     }
 
@@ -313,6 +330,14 @@ class CompanionService : Service(),
 
         // Reset overlay state (the character itself follows the state machine)
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(WeatherModifier.NONE)
+    }
+
+    /** Manual modes switch at once; in "auto_bluetooth" the car's Bluetooth decides. */
+    private fun applyProfileSetting() {
+        when (settings.profileMode) {
+            "manual_auto" -> profileManager.switchProfile(AppProfile.AUTO)
+            "manual_daily" -> profileManager.switchProfile(AppProfile.DAILY)
+        }
     }
 
     // BluetoothTrigger.Listener

@@ -99,6 +99,12 @@ class StateMachine(
     /** True once the car has been standing long enough for the next departure to count as a trip start. */
     private var parked: Boolean = false
 
+    /**
+     * True until the first GPS fix after a reset. Standing still at that moment also counts as
+     * parked: the usual case is "get in, start the app (or the car's Bluetooth connects), drive off".
+     */
+    private var awaitingFirstFix: Boolean = true
+
     /** When the car left the parking spot; TRIP_START blocked by ALERT/PET is retried until [TRIP_START_RETRY_MS]. */
     private var departedAt: Long = 0L
 
@@ -124,6 +130,7 @@ class StateMachine(
         lastSpeedAt = 0L
         stoppedSince = 0L
         parked = false
+        awaitingFirstFix = true
         departedAt = 0L
         wasTurning = false
         // A call or music outlives a profile switch: go straight back to it.
@@ -278,8 +285,9 @@ class StateMachine(
     // Auto profile updates
 
     /**
-     * Detects the start of a trip: the car stood still for at least [PARKED_MS],
-     * then reached [MOVING_KMH]. Short stops (traffic lights) do not count.
+     * Detects the start of a trip: the car stood still for at least [PARKED_MS] (or was standing
+     * at the first GPS fix after start), then reached [MOVING_KMH]. Short stops (traffic lights)
+     * do not count.
      * If ALERT or PET is playing at that moment, TRIP_START is retried on the next updates
      * for up to [TRIP_START_RETRY_MS] after departure.
      */
@@ -292,9 +300,12 @@ class StateMachine(
         if (data.isTurning && !wasTurning) onSharpTurn(data.turnDirection)
         wasTurning = data.isTurning
 
+        val firstFix = awaitingFirstFix
+        awaitingFirstFix = false
+
         if (data.speedKmh < STOPPED_KMH) {
             if (stoppedSince == 0L) stoppedSince = now
-            if (now - stoppedSince >= PARKED_MS) {
+            if (firstFix || now - stoppedSince >= PARKED_MS) {
                 parked = true
                 departedAt = 0L
             }
