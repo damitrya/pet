@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Companion</string>
+    <string name="app_name">Mimio</string>
     <string name="app_subtitle">Виртуальный компаньон</string>
 
     <!-- Notification -->
-    <string name="notification_channel_name">Companion</string>
+    <string name="notification_channel_name">Mimio</string>
     <string name="notification_channel_description">Уведомление о работе компаньона</string>
-    <string name="notification_title">Companion активен</string>
+    <string name="notification_title">Mimio активен</string>
     <string name="notification_text_active">Компаньон отображается</string>
     <string name="notification_text_hidden">Компаньон скрыт</string>
 
@@ -93,5 +93,5 @@
     <string name="thresholds_error">Ошибка: введите корректные числа</string>
 
     <!-- Version -->
-    <string name="version_info">Companion v2.0</string>
+    <string name="version_info">Mimio v2.0</string>
 </resources>

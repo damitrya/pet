@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Companion</string>
+    <string name="app_name">Mimio</string>
     <string name="app_subtitle">Virtual companion</string>
 
     <!-- Notification -->
-    <string name="notification_channel_name">Companion</string>
-    <string name="notification_channel_description">Companion service notification</string>
-    <string name="notification_title">Companion active</string>
-    <string name="notification_text_active">Companion is visible</string>
-    <string name="notification_text_hidden">Companion is hidden</string>
+    <string name="notification_channel_name">Mimio</string>
+    <string name="notification_channel_description">Mimio service notification</string>
+    <string name="notification_title">Mimio active</string>
+    <string name="notification_text_active">Mimio is visible</string>
+    <string name="notification_text_hidden">Mimio is hidden</string>
 
     <!-- Actions -->
     <string name="action_show">Show</string>
@@ -93,5 +93,5 @@
     <string name="thresholds_error">Error: enter valid numbers</string>
 
     <!-- Version -->
-    <string name="version_info">Companion v2.0</string>
+    <string name="version_info">Mimio v2.0</string>
 </resources>

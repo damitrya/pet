@@ -11,6 +11,7 @@ Usage:
     python3 tools/fox/generate.py                 # write all WebP files
     python3 tools/fox/generate.py tease sneeze    # only these
     python3 tools/fox/generate.py --wave3         # only the wave 3 animations
+    python3 tools/fox/generate.py --car           # only the car companion animations
     python3 tools/fox/generate.py --preview DIR   # also write preview sheet/GIF
     python3 tools/fox/generate.py --gallery       # also write tools/fox/gallery.html
     python3 tools/fox/generate.py --gallery-only  # just rebuild the gallery from existing files
@@ -399,6 +400,7 @@ def default_pose():
         tail_wrap=0.0,               # 0..1 tail moves around to the front (see TAIL_WRAPS)
         tail_style="face",
         tail_peek=0.0,               # "face" wrap: tail slides down to let the left eye peek out
+        props=[],                    # held / nearby objects in body space (see draw_prop), under the paws
     )
 
 
@@ -478,6 +480,9 @@ def draw_character(pose):
     tail_mask, tip_mask = _tail_masks(tail_centre(pose), tail_tf)
     cv.paint_gradient(tail_mask, ORANGE_TOP, ORANGE_BOT, g(50 + grad_dy), g(110 + grad_dy))
     cv.paint(tip_mask, CREAM)
+    for prop in pose["props"]:
+        if prop.get("back"):
+            draw_prop(cv, prop, body_tf)
 
     # ---- body
     body = ellipse_pts(64, 103, 30, 20)
@@ -554,9 +559,17 @@ def draw_character(pose):
                 img.putalpha(img.getchannel("A").point(lambda v: int(v * front)))
             cv.img.alpha_composite(img)
 
+    for prop in pose["props"]:
+        if not prop.get("back") and not prop.get("front"):
+            draw_prop(cv, prop, body_tf)
+
     arms = pose["arm"]
     for arm in ([arms] if isinstance(arms, dict) else arms or []):
         draw_arm(cv, arm, body_tf)
+
+    for prop in pose["props"]:
+        if prop.get("front"):
+            draw_prop(cv, prop, body_tf)
 
     out = cv.outlined(1.4)
     for extra in pose["extras"]:
@@ -672,6 +685,233 @@ def draw_arm(cv, arm, tf):
     cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.6, 5.8), tf), PAW)
 
 
+# ---------------------------------------------------------------- props
+# Objects the fox holds or uses (steering wheel, wrench, map…). They are drawn in body space, so they
+# lean, squash and jump together with the body, and the paws are drawn over them (the paw closes
+# around the grip). Each prop has its own thin outline, like the wrapped tail, and then becomes part
+# of the character's silhouette. A prop is a dict: kind, x, y (its grip point or centre), rot, scale,
+# opacity, plus kind-specific fields; `back=True` draws it behind the body (the fuel hose),
+# `front=True` in front of the paw (the sponge), `ground=True` keeps it standing on the ground while
+# the body leans (the wheel being checked).
+
+STEEL = (178, 188, 206)
+STEEL_DARK = (118, 128, 148)
+RUBBER = (52, 52, 60)
+RIM_GREY = (64, 68, 82)
+PAPER = (252, 244, 214)
+STRAP = (66, 76, 100)
+HOSE = (44, 46, 54)
+NOZZLE = (70, 176, 96)
+SPONGE = (255, 214, 90)
+FOAM = (250, 252, 255)
+FLAG_DARK = (44, 44, 52)
+POLE = (126, 84, 52)
+
+WHEEL_R = 16.0
+WHEEL_SQUASH = 0.86          # the steering wheel is seen a little from above
+TIRE_R = 13.0
+
+# Resting places of the front paws (body space): a raised paw starts and ends here.
+PAW_REST = {-1: (42, 108), 1: (86, 108)}
+
+
+def paw(side, target, k):
+    """Front paw `side` moved from its resting place toward `target` (0 = resting … 1 = there)."""
+    rx, ry = PAW_REST[side]
+    return dict(side=side, x=lerp(rx, target[0], k), y=lerp(ry, target[1], k))
+
+
+def raised(*arms):
+    """Only the paws that are really lifted (a paw at rest is part of the body drawing)."""
+    out = []
+    for a in arms:
+        rx, ry = PAW_REST[a["side"]]
+        if math.hypot(a["x"] - rx, a["y"] - ry) > 0.3:
+            out.append(a)
+    return out or None
+
+
+def pop_in_out(t, a, b, c, d):
+    """Scale of a prop that pops in over [a, b] with a small overshoot and shrinks away over [c, d]."""
+    return ease_out_back(clamp((t - a) / max(1e-6, b - a))) * (1 - smooth((t - c) / max(1e-6, d - c)))
+
+
+def _local(prop):
+    return (Tf.translate(prop["x"], prop["y"]) @ Tf.rotate(prop.get("rot", 0.0), 0, 0)
+            @ Tf.scale(prop.get("scale", 1.0), prop.get("scale", 1.0), 0, 0))
+
+
+def prop_at(prop, pt):
+    """Body-space position of a point given in the prop's own coordinates (where a paw holds it)."""
+    x, y = _local(prop).apply([pt])[0]
+    return float(x), float(y)
+
+
+def wheel_grip(cx, cy, turn, ang, scale=1.0):
+    """Point on the steering-wheel rim at `ang` degrees (0 = right, y down), turned with the wheel."""
+    a = math.radians(ang + turn)
+    r = WHEEL_R * scale
+    return cx + r * math.cos(a), cy + r * WHEEL_SQUASH * math.sin(a)
+
+
+def to_canvas(pt):
+    """Body-space point → canvas (extras are drawn in canvas space, the body is shrunk by FIT)."""
+    x, y = FIT.apply([pt])[0]
+    return float(x), float(y)
+
+
+def _ring(r, a0=0.0, a1=360.0, n=90):
+    return [(r * math.cos(math.radians(lerp(a0, a1, k / n))), r * math.sin(math.radians(lerp(a0, a1, k / n))))
+            for k in range(n + 1)]
+
+
+def _prop_wheel(cv, pr, tf, body_tf, lb):
+    turn = pr.get("turn", 0.0)
+    t2 = tf @ Tf.scale(1, WHEEL_SQUASH, 0, 0)
+    for a in (90, 210, 330):
+        r = math.radians(a + turn)
+        spoke = [(4 * math.cos(r), 4 * math.sin(r)), (WHEEL_R * math.cos(r), WHEEL_R * math.sin(r))]
+        cv.paint(Canvas.stroke_mask(spoke, 3.2, t2), RIM_GREY)
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, 0, 5.6, 5.6), t2), (80, 86, 104))
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, 0, 2.3, 2.3), t2), ORANGE_TOP)
+    cv.paint(Canvas.stroke_mask(_ring(WHEEL_R), 4.6, t2), RIM_GREY)
+    cv.paint(Canvas.stroke_mask(_ring(WHEEL_R, 196, 256, 16), 1.3, t2), (146, 154, 176))   # light from the top left
+    cv.paint(Canvas.stroke_mask(_ring(WHEEL_R, -99 + turn, -81 + turn, 8), 4.6, t2), ORANGE_BOT)  # top marker turns
+
+
+def _prop_wrench(cv, pr, tf, body_tf, lb):
+    handle = Canvas.stroke_mask([(0, 0), (19, 0)], 4.6, tf)
+    head = Canvas.poly_mask(ellipse_pts(23, 0, 6, 6), tf)
+    jaw = Canvas.poly_mask([(24, -2.4), (31, -2.4), (31, 2.4), (24, 2.4)], tf)
+    shape = ImageChops.lighter(handle, ImageChops.subtract(head, jaw))
+    cv.paint(shape, STEEL)
+    cv.paint(Canvas.stroke_mask([(4, 0.9), (17, 0.9)], 1.1, tf), STEEL_DARK)
+    cv.paint(clip(Canvas.poly_mask(ellipse_pts(21.5, -2.8, 2.6, 1.4), tf), shape), WHITE, 0.65)
+
+
+def _prop_map(cv, pr, tf, body_tf, lb):
+    u = clamp(pr.get("unfold", 1.0), 0.15, 1.0)
+    w, h = 34 * u, 22
+    paper = Canvas.poly_mask(_rect_pts(0, 0, w, h, 0, 1), tf)
+    cv.paint(paper, PAPER)
+    cv.paint(clip(Canvas.poly_mask(ellipse_pts(-7 * u, -4, 7 * u, 5), tf), paper), (196, 228, 170))
+    river = bezier((-17 * u, 6), (0, -1), (17 * u, 3), 16)
+    cv.paint(clip(Canvas.stroke_mask(river, 2.2, tf), paper), (150, 196, 240))
+    route = bezier((-12 * u, 7), (-2 * u, -9), (9 * u, -4.5), 24)
+    for k in range(0, len(route) - 2, 4):                        # dashed red route
+        cv.paint(clip(Canvas.stroke_mask(route[k:k + 3], 1.5, tf), paper), (230, 70, 60))
+    for fx in (-w / 6, w / 6):
+        cv.paint(Canvas.stroke_mask([(fx, -h / 2 + 1), (fx, h / 2 - 1)], 0.9, tf), (214, 196, 160))
+    cv.paint(Canvas.poly_mask(ellipse_pts(9 * u, -6.5, 2.6, 2.6), tf), (230, 70, 60))
+    cv.paint(Canvas.poly_mask(ellipse_pts(9 * u, -6.5, 0.9, 0.9), tf), WHITE)
+
+
+def _prop_tire(cv, pr, tf, body_tf, lb):
+    k = pr.get("squash", 0.0)
+    spin = pr.get("spin", 0.0)
+    t2 = tf @ Tf.scale(1 + 0.08 * k, 1 - 0.12 * k, 0, TIRE_R)    # squashed against the ground
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, 0, TIRE_R, TIRE_R), t2), RUBBER)
+    for j in range(12):                                          # tread blocks show the rolling
+        a = spin + 30 * j
+        r = math.radians(a)
+        cx, cy = (TIRE_R - 1.6) * math.cos(r), (TIRE_R - 1.6) * math.sin(r)
+        cv.paint(Canvas.poly_mask(_rect_pts(cx, cy, 2.0, 3.4, a, 1), t2), (84, 84, 96))
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, 0, 7.6, 7.6), t2), (196, 202, 216))
+    cv.paint(Canvas.stroke_mask(_ring(6.0, n=48), 0.9, t2), (146, 154, 172))
+    for j in range(5):
+        r = math.radians(spin + 72 * j)
+        cv.paint(Canvas.poly_mask(ellipse_pts(3.8 * math.cos(r), 3.8 * math.sin(r), 1.1, 1.1), t2), (118, 124, 140))
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, 0, 1.8, 1.8), t2), (90, 96, 112))
+
+
+def _prop_belt(cv, pr, tf, body_tf, lb):
+    """Seatbelt from the shoulder anchor `a` to the paw / buckle `e`; `buckle` fades the latch in."""
+    a, e = pr["a"], pr["e"]
+    bk = pr.get("buckle", 0.0)
+    if bk > 0:
+        bx, by = pr["b"]
+        cv.paint(Canvas.poly_mask(_rect_pts(bx, by, 8, 6.5, -22, 2), body_tf), (44, 44, 52), bk)
+        cv.paint(Canvas.poly_mask(_rect_pts(bx + 1.2, by - 0.4, 3.2, 2.4, -22, 1), body_tf), (222, 64, 52), bk)
+    if math.hypot(e[0] - a[0], e[1] - a[1]) < 1.0:
+        strap = [a, e]
+    else:
+        bow = pr.get("bow", (0.0, 5.0))
+        strap = bezier(a, ((a[0] + e[0]) / 2 + bow[0], (a[1] + e[1]) / 2 + bow[1]), e, 20)
+    cv.paint(Canvas.stroke_mask(strap, 6.4, body_tf), STRAP)
+    cv.paint(Canvas.stroke_mask(strap, 1.3, body_tf), (110, 122, 150))
+    (x0, y0), (x1, y1) = strap[-2], strap[-1]
+    ang = math.degrees(math.atan2(y1 - y0, x1 - x0)) if (x1, y1) != (x0, y0) else 30.0
+    cv.paint(Canvas.poly_mask(_rect_pts(e[0], e[1], 6.5, 4.6, ang, 1), body_tf), STEEL)
+
+
+def _prop_nozzle(cv, pr, tf, body_tf, lb):
+    sq = pr.get("squeeze", 0.0)
+    cv.paint(Canvas.poly_mask(chaikin([(-7, -10), (9, -10), (11, -6), (-7, -4)], 2), tf), NOZZLE)
+    cv.paint(Canvas.poly_mask([(9, -9), (24, -7), (24, -4.4), (9, -5.6)], tf), STEEL)
+    cv.paint(Canvas.stroke_mask([(1, -3.5), (9, -3.5 + 2.2 * (1 - sq))], 1.8, tf), STEEL_DARK)   # trigger lever
+    cv.paint(Canvas.stroke_mask([(-5, -8.6), (7, -8.6)], 1.0, tf), (150, 220, 160), 0.8)
+    cv.paint(Canvas.poly_mask(_rect_pts(0, 3, 6, 13, 0, 1), tf), (52, 120, 70))                  # handle
+
+
+def _prop_hose(cv, pr, tf, body_tf, lb):
+    """Fuel hose from the back of the nozzle (same x, y, rot, scale) to `to`, behind the body."""
+    start = lb.apply([(-6, -7)])[0]
+    end = pr["to"]
+    ctrl = pr.get("ctrl", (114, 104))
+    pts = bezier(tuple(start), ctrl, end, 24)
+    cv.paint(Canvas.stroke_mask(pts, 4.2, body_tf), HOSE)
+    cv.paint(Canvas.stroke_mask(pts[:16], 0.9, body_tf), (96, 100, 112), 0.8)
+
+
+def _prop_sponge(cv, pr, tf, body_tf, lb):
+    foam = pr.get("foam", 0.0)
+    body = Canvas.poly_mask(_rect_pts(0, 0, 15, 10, 0, 2), tf)
+    cv.paint(body, SPONGE)
+    cv.paint(clip(Canvas.poly_mask(_rect_pts(0, -4.2, 16, 3.4, 0, 1), tf), body), (96, 180, 112))
+    for px, py in ((-4, 1.5), (1, 3), (4.5, 0.5), (-0.8, -0.2), (-5.5, 3.4)):
+        cv.paint(Canvas.poly_mask(ellipse_pts(px, py, 1.1, 0.9), tf), (226, 176, 58))
+    if foam > 0.02:
+        for fx, fy, r in ((-5, -7, 3.2), (0, -8, 4.0), (5, -7, 3.4), (8.5, -3, 3.0), (-8, -3, 2.6), (3, -11, 2.4)):
+            cv.paint(Canvas.poly_mask(ellipse_pts(fx, fy, r * foam, r * foam), tf), FOAM)
+        cv.paint(Canvas.poly_mask(ellipse_pts(1.5, -9, 1.4 * foam, 1.1 * foam), tf), (190, 220, 250))
+
+
+def _prop_flag(cv, pr, tf, body_tf, lb):
+    side = pr.get("side", -1)
+    ph = pr.get("wave", 0.0)
+    cv.paint(Canvas.stroke_mask([(0, 7), (0, -28)], 2.4, tf), POLE)
+    cv.paint(Canvas.poly_mask(ellipse_pts(0, -29, 2.1, 2.1), tf), (255, 200, 70))
+
+    def pt(u, v):
+        return side * (1.2 + 18 * u), -27 + 12 * v + 2.6 * u * math.sin(ph - 4.2 * u)
+
+    for c in range(4):
+        for r in range(3):
+            quad = [pt(c / 4, r / 3), pt((c + 1) / 4, r / 3), pt((c + 1) / 4, (r + 1) / 3), pt(c / 4, (r + 1) / 3)]
+            cv.paint(Canvas.poly_mask(quad, tf), FLAG_DARK if (c + r) % 2 else WHITE)
+
+
+PROPS = {
+    "wheel": _prop_wheel, "wrench": _prop_wrench, "map": _prop_map, "tire": _prop_tire,
+    "belt": _prop_belt, "nozzle": _prop_nozzle, "hose": _prop_hose, "sponge": _prop_sponge,
+    "flag": _prop_flag,
+}
+
+
+def draw_prop(cv, prop, body_tf):
+    op = prop.get("opacity", 1.0)
+    if op <= 0.01 or prop.get("scale", 1.0) <= 0.01:
+        return
+    lb = _local(prop)
+    base = FIT if prop.get("ground") else body_tf      # a ground prop does not lean or jump with the body
+    layer = Canvas()
+    PROPS[prop["kind"]](layer, prop, base @ lb, base, lb)
+    img = layer.outlined(1.0)
+    if op < 1:
+        img.putalpha(img.getchannel("A").point(lambda v: int(v * op)))
+    cv.img.alpha_composite(img)
+
+
 # ---------------------------------------------------------------- extras
 
 def _sticker(pts_list, color, stroke_list=(), outline=WHITE, opacity=1.0, out_px=1.2):
@@ -763,9 +1003,68 @@ def draw_extra(img, e):
         strokes = [([(x - 7 * s + dx, y + dy), (x + 7 * s + dx, y + dy)], 1.8)
                    for dx, dy in ((0, -7 * s), (-5 * s, 0), (2 * s, 7 * s))]
         layer = _sticker([], (150, 165, 195), strokes, opacity=op, out_px=0.8)
+    elif kind == "gauge":
+        layer = _gauge(x, y, s, e.get("level", 0.0), op)
+    elif kind == "bubble":
+        layer = _bubble(x, y, s, op)
+    elif kind == "arrow":
+        side = e.get("side", 1)
+        pts = [(x - side * 7 * s, y - 2.2 * s), (x + side * 1 * s, y - 2.2 * s), (x + side * 1 * s, y - 6 * s),
+               (x + side * 8 * s, y), (x + side * 1 * s, y + 6 * s), (x + side * 1 * s, y + 2.2 * s),
+               (x - side * 7 * s, y + 2.2 * s)]
+        layer = _sticker([chaikin(pts, 1)], (70, 190, 110), opacity=op, out_px=1.3)
+    elif kind == "psign":
+        layer = _psign(x, y, s, op)
     else:
         return
     img.alpha_composite(layer)
+
+
+def _faded(img, op):
+    if op < 1:
+        img.putalpha(img.getchannel("A").point(lambda v: int(v * op)))
+    return img
+
+
+def _gauge(x, y, s, level, op):
+    """Fuel gauge: half dial from red E (left) to green F (right), the needle points at `level`."""
+    cv = Canvas()
+    r = 11 * s
+    dial = [(x, y)] + [(x + r * math.cos(math.radians(a)), y + r * math.sin(math.radians(a))) for a in range(180, 361, 6)]
+    cv.paint(Canvas.poly_mask(dial), (60, 64, 80))
+    inner = [(x, y)] + [(x + (r - 2 * s) * math.cos(math.radians(a)), y + (r - 2 * s) * math.sin(math.radians(a)))
+                        for a in range(180, 361, 6)]
+    cv.paint(Canvas.poly_mask(inner), WHITE)
+    for a0, col in ((180, (236, 70, 56)), (306, (70, 190, 96))):
+        arc = [(x + (r - 3.4 * s) * math.cos(math.radians(a)), y + (r - 3.4 * s) * math.sin(math.radians(a)))
+               for a in range(a0, a0 + 55, 5)]
+        cv.paint(Canvas.stroke_mask(arc, 1.8 * s), col)
+    a = math.radians(180 + 180 * clamp(level))
+    cv.paint(Canvas.stroke_mask([(x, y), (x + (r - 3 * s) * math.cos(a), y + (r - 3 * s) * math.sin(a))], 1.6 * s),
+             (220, 50, 50))
+    cv.paint(Canvas.poly_mask(ellipse_pts(x, y, 1.8 * s, 1.8 * s)), (60, 64, 80))
+    return _faded(cv.outlined(1.1, WHITE), op)
+
+
+def _bubble(x, y, s, op):
+    cv = Canvas()
+    r = 3.2 * s
+    cv.paint(Canvas.poly_mask(ellipse_pts(x, y, r, r)), (200, 232, 255), 0.45)
+    cv.paint(Canvas.stroke_mask([(x + px, y + py) for px, py in _ring(r, n=40)], 0.8 * s),
+             (120, 180, 230))
+    cv.paint(Canvas.poly_mask(ellipse_pts(x - r * 0.35, y - r * 0.4, r * 0.3, r * 0.22)), WHITE)
+    return _faded(cv.img, op)
+
+
+def _psign(x, y, s, op):
+    """Blue parking sign with a white P."""
+    cv = Canvas()
+    cv.paint(Canvas.poly_mask(_rect_pts(x, y, 15 * s, 15 * s, 0, 2)), (50, 110, 220))
+    stem = [(x - 2.6 * s, y + 4.6 * s), (x - 2.6 * s, y - 4.6 * s)]
+    bowl = bezier((x - 2.6 * s, y - 4.6 * s), (x + 6.2 * s, y - 3.2 * s), (x - 2.6 * s, y + 0.6 * s), 12)
+    cv.paint(Canvas.stroke_mask(stem, 2.2 * s), WHITE)
+    cv.paint(Canvas.stroke_mask(bowl, 2.2 * s), WHITE)
+    return _faded(cv.outlined(1.2, WHITE), op)
 
 
 def _rect_pts(cx, cy, w, h, rot=0.0, round_=2):
@@ -2123,6 +2422,445 @@ def proud(i, n):
     return p
 
 
+# ---- car companion: driving, care for the car, getting ready, arriving
+# Every one starts and ends in the calm pose: props pop in while the paws rise and go away
+# while they come back down, so CALM / one-shot transitions do not jump.
+
+WHEEL_AT = (64, 104)
+
+
+def _wheel_hands(p, t, s, hold, turn, cx=WHEEL_AT[0], cy=WHEEL_AT[1]):
+    """Steering wheel in front of the belly, both paws on the rim at ten to two, turning with it."""
+    if s > 0.01:
+        p["props"] = p["props"] + [dict(kind="wheel", x=cx, y=cy, turn=turn, scale=s)]
+    left = wheel_grip(cx, cy, turn, 200, max(s, 0.0))
+    right = wheel_grip(cx, cy, turn, -20, max(s, 0.0))
+    p["arm"] = raised(paw(-1, left, hold), paw(1, right, hold))
+
+
+def driving(i, n):
+    """Takes the steering wheel with both paws and steers calmly, eyes on the road, small corrections."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6, cycles=2)
+    hold = window(t, 0.02, 0.13, 0.87, 0.98, ease_in_out)
+    s = pop_in_out(t, 0.03, 0.13, 0.87, 0.96)
+    ph = 2 * math.pi * clamp((t - 0.13) / 0.74)
+    steer = (8 * math.sin(2 * ph) + 3 * math.sin(4 * ph + 0.8)) * window(t, 0.13, 0.2, 0.8, 0.87)
+    _wheel_hands(p, t, s, hold, steer)
+    p["lean"] = 0.3 * steer
+    p["head_tilt"] = 0.25 * steer
+    p["look"] = (0.05 * steer, -0.35 * hold)
+    p["open"] = 1 - blink_shut(t, 0.56, "single", 0.05)
+    p["ear_l"] = ear_flick(t, 0.36, amp=9) - 0.4 * steer
+    p["ear_r"] = -0.4 * steer
+    p["tail"] = 6 * math.sin(2 * math.pi * t * 2) - 0.5 * steer
+    p["mouth"] = "smile" if 0.25 < t < 0.75 else "w"
+    p["blush"] = 0.5
+    return p
+
+
+BELT_ANCHOR = (27, 86)
+BELT_BUCKLE = (92, 113)
+
+
+def seatbelt(i, n):
+    """Pulls the seatbelt from over its shoulder, passes it to the other paw, clicks it in and pats it: ready."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    mid = (62, 106)
+    # left paw: up to the anchor, pulls the belt to the middle, lets go; later pats the strap
+    reach = keys(t, [(0.04, 0.0), (0.18, 1.0)])
+    pull = keys(t, [(0.2, 0.0), (0.36, 1.0)])
+    left_back = keys(t, [(0.4, 0.0), (0.5, 1.0)])
+    left = tuple(lerp(a_, b_, pull) for a_, b_ in zip(BELT_ANCHOR, mid))
+    pat = window(t, 0.62, 0.66, 0.78, 0.82, ease_in_out)
+    tap = 2.0 * abs(math.sin(2 * math.pi * (t - 0.66) * 4)) * window(t, 0.66, 0.68, 0.76, 0.78)
+    pat_at = (58, 101 + tap)
+    if t < 0.55:
+        arm_l = paw(-1, left, reach * (1 - left_back))
+    else:
+        arm_l = paw(-1, pat_at, pat)
+    # right paw: takes the belt in the middle and carries it to the buckle at its hip
+    meet = keys(t, [(0.28, 0.0), (0.38, 1.0)])
+    carry = keys(t, [(0.38, 0.0), (0.52, 1.0)])
+    right_back = keys(t, [(0.58, 0.0), (0.68, 1.0)])
+    right = tuple(lerp(a_, b_, carry) for a_, b_ in zip(mid, BELT_BUCKLE))
+    arm_r = paw(1, right, meet * (1 - right_back))
+    p["arm"] = raised(arm_l, arm_r)
+    grip = left if t < 0.38 else right
+    strap_on = ramp(t, 0.15, 0.2) * (1 - ramp(t, 0.84, 0.96))
+    if strap_on > 0.01:
+        end = BELT_ANCHOR if t < 0.2 else (grip if t < 0.52 else BELT_BUCKLE)
+        p["props"] = [dict(kind="belt", x=0, y=0, a=BELT_ANCHOR, e=end, b=BELT_BUCKLE, opacity=strap_on,
+                           buckle=ramp(t, 0.16, 0.26))]
+    click = bump(t, 0.52, 0.6)
+    p["sy"] *= 1 - 0.05 * click
+    p["sx"] *= 1 + 0.03 * click
+    p["look"] = gaze(t, [(0.0, (0.0, 0.0)), (0.06, (-1.3, -0.5)), (0.3, (-0.3, 0.9)), (0.44, (0.9, 1.0)),
+                         (0.62, (0.4, 0.8)), (0.82, (0.0, 0.0))])
+    p["head_tilt"] = -8 * window(t, 0.04, 0.16, 0.24, 0.36) + 5 * window(t, 0.36, 0.46, 0.6, 0.72)
+    p["head_dy"] = 1.5 * window(t, 0.3, 0.4, 0.74, 0.84)
+    p["ear_l"] = ear_flick(t, 0.53, amp=12)
+    p["ear_r"] = ear_flick(t, 0.55, amp=12)
+    happy = 0.55 < t < 0.84
+    p["eyes"] = "happy" if happy else "open"
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.05)
+    p["mouth"] = "smile" if happy else ("o" if 0.3 < t < 0.5 else "w")
+    p["blush"] = 0.5 + 0.2 * happy
+    p["tail"] = 4 * math.sin(2 * math.pi * t) + 12 * math.sin(2 * math.pi * t * 4) * window(t, 0.55, 0.6, 0.8, 0.88)
+    ex = []
+    bx, by = to_canvas(BELT_BUCKLE)
+    for dx, dy, d in ((6, -8, 0.53), (-4, -12, 0.56)):
+        f = _floating(t, "sparkle", bx + dx, by + dy, rise=5, delay=d, life=0.16, size=0.7, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def navigator(i, n):
+    """Unfolds a map, studies it and turns it around, has an idea and points the way, folds the map."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    hold = window(t, 0.03, 0.14, 0.84, 0.95, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.15, 0.84, 0.93)
+    unfold = keys(t, [(0.08, 0.3), (0.2, 1.0), (0.56, 1.0), (0.66, 0.5)])
+    point = window(t, 0.58, 0.66, 0.78, 0.86, ease_in_out)
+    rot = keys(t, [(0.26, 0.0), (0.33, 22.0), (0.4, 22.0), (0.47, -8.0), (0.53, 0.0)]) - 10 * point
+    mp = dict(kind="map", x=lerp(64, 58, point), y=lerp(100, 103, point), rot=rot, unfold=unfold, scale=s)
+    if s > 0.01:
+        p["props"] = [mp]
+    half = 17 * clamp(unfold, 0.15, 1.0)
+    left, right = prop_at(mp, (-half, 0)), prop_at(mp, (half, 0))
+    right = (lerp(right[0], 110, point), lerp(right[1], 70, point))
+    p["arm"] = raised(paw(-1, left, hold), paw(1, right, hold))
+    study = window(t, 0.16, 0.22, 0.52, 0.58)
+    p["look"] = gaze(t, [(0.0, (0.0, 0.0)), (0.16, (0.0, 0.9)), (0.24, (-0.7, 0.9)), (0.32, (0.6, 0.8)),
+                         (0.4, (-0.2, 1.0)), (0.46, (0.5, 0.9)), (0.53, (0.0, 0.0)), (0.6, (1.4, -0.4)),
+                         (0.82, (0.0, 0.0))])
+    p["head_tilt"] = -0.25 * rot * study - 4 * study + 7 * point
+    p["head_dy"] = 2.0 * study
+    aha = bump(t, 0.52, 0.6)
+    p["ear_scale"] = 1 + 0.1 * aha
+    p["ear_out"] = -6 * aha + 4 * study
+    p["ear_l"] = ear_flick(t, 0.3, amp=8)
+    p["open"] = 1 - blink_shut(t, 0.44, "single", 0.05)
+    p["mouth"] = "open" if 0.56 < t < 0.8 else ("o" if 0.34 < t < 0.44 else "w")
+    p["mouth_open"] = 0.7
+    p["blush"] = 0.5 + 0.2 * point
+    p["tail"] = 4 * math.sin(2 * math.pi * t) + 12 * math.sin(2 * math.pi * t * 4) * point
+    ex = []
+    q = window(t, 0.34, 0.38, 0.48, 0.52, ease_out_back)
+    if q > 0.02:
+        ex.append(dict(kind="question", x=104, y=26 + 2 * math.sin(2 * math.pi * t * 3), scale=q * 0.9,
+                       opacity=min(1.0, q * 1.5)))
+    f = _floating(t, "sparkle", 102, 28, rise=6, delay=0.53, life=0.16, size=1.0, drift=0, rot=90 * t)
+    if f:
+        ex.append(f)
+    ar = window(t, 0.62, 0.68, 0.78, 0.84, ease_out_back)
+    if ar > 0.02:
+        ex.append(dict(kind="arrow", x=106 + 2.5 * math.sin(2 * math.pi * t * 6), y=58, scale=ar, side=1,
+                       opacity=min(1.0, ar * 1.5)))
+    p["extras"] = ex
+    return p
+
+
+BOLT = (110, 104)
+WRENCH_HEAD = 23
+
+
+def mechanic(i, n):
+    """Takes out a wrench, tightens a bolt with a few ratcheting turns (tongue out), phew, twirls the wrench."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    hold = window(t, 0.03, 0.12, 0.88, 0.97, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.13, 0.87, 0.95)
+    work = window(t, 0.24, 0.3, 0.56, 0.62, ease_in_out)
+    ratchet = 18 + 16 * math.sin(2 * math.pi * (t - 0.3) * 11)
+    twirl = 360 * ease_in_out(clamp((t - 0.74) / 0.1))
+    rot = lerp(-55 + twirl, ratchet, work)
+    r = math.radians(ratchet)
+    on_bolt = (BOLT[0] - WRENCH_HEAD * math.cos(r), BOLT[1] - WRENCH_HEAD * math.sin(r))
+    grip = (lerp(92, on_bolt[0], work), lerp(90, on_bolt[1], work))
+    hand = paw(1, grip, hold)
+    if s > 0.01:
+        p["props"] = [dict(kind="wrench", x=hand["x"], y=hand["y"], rot=rot, scale=s)]
+    phew = window(t, 0.6, 0.64, 0.7, 0.74, ease_in_out)
+    p["arm"] = raised(hand)
+    p["lean"] = 3 * work - 1.5 * phew
+    p["head_tilt"] = 6 * work - 4 * phew
+    p["sy"] *= 1 - 0.03 * phew
+    p["tongue"] = 0.55 * work
+    p["tongue_dx"] = 2.5
+    p["look"] = gaze(t, [(0.0, (0.0, 0.0)), (0.13, (0.9, -0.6)), (0.26, (1.3, 0.7)), (0.6, (0.0, 0.0)),
+                         (0.76, (0.8, -0.4)), (0.86, (0.0, 0.0))])
+    proud = 0.84 < t < 0.95
+    if phew > 0.5:
+        p["eyes"] = "closed"
+    elif proud:
+        p["eyes"] = "happy"
+    p["open"] = 1 - blink_shut(t, 0.2, "single", 0.05)
+    p["mouth"] = "smile" if proud else ("open" if phew > 0.5 else "w")
+    p["mouth_open"] = 0.5
+    p["ear_r"] = ear_flick(t, 0.34, amp=8) + ear_flick(t, 0.46, amp=8)
+    p["blush"] = 0.5 + 0.2 * proud
+    p["tail"] = 5 * math.sin(2 * math.pi * t * 1.5) + 10 * math.sin(2 * math.pi * t * 4) * window(t, 0.82, 0.86, 0.92, 0.97)
+    ex = []
+    bx, by = to_canvas(BOLT)
+    for d in (0.33, 0.42, 0.51):
+        f = _floating(t, "sparkle", bx - 2, by - 4, rise=4, delay=d, life=0.08, size=0.55, drift=0, rot=120 * t)
+        if f:
+            ex.append(f)
+    for f in (_floating(t, "sweat", 26, 38, rise=-10, delay=0.6, life=0.16, size=0.9, drift=0),
+              _floating(t, "puff", 42, 86, rise=8, delay=0.62, life=0.16, size=0.7, drift=-2)):
+        if f:
+            ex.append(f)
+    hx, hy = to_canvas(prop_at(dict(x=grip[0], y=grip[1], rot=rot), (WRENCH_HEAD, 0)))
+    f = _floating(t, "sparkle", hx, hy - 4, rise=5, delay=0.84, life=0.12, size=0.8, drift=0, rot=90 * t)
+    if f:
+        ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def tire_check(i, n):
+    """A wheel rolls up; the fox leans over, pokes the tyre twice, nods approvingly, and the wheel rolls away."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    xin = lerp(10, 24, ease_out(clamp((t - 0.04) / 0.16)))
+    xout = lerp(24, 10, ease_in(clamp((t - 0.8) / 0.14)))
+    x = xin if t < 0.5 else xout
+    op = ramp(t, 0.04, 0.1) * (1 - ramp(t, 0.86, 0.94))
+    pokes = bump(t, 0.42, 0.48) + bump(t, 0.52, 0.58)
+    if op > 0.01:
+        p["props"] = [dict(kind="tire", x=x, y=GROUND[1] - TIRE_R, spin=(x - 10) / TIRE_R * 180 / math.pi,
+                           squash=0.8 * pokes, opacity=op, ground=True)]
+    lean = window(t, 0.2, 0.3, 0.7, 0.8, ease_in_out)
+    poke = window(t, 0.36, 0.42, 0.6, 0.66, ease_in_out)
+    p["arm"] = raised(paw(-1, (31, 93 + 3.5 * pokes), poke))
+    p["lean"] = -6 * lean
+    p["dx"] = -2.5 * lean
+    p["dy"] = -2.5 * lean                     # lifted a little, so the paws stay in the frame
+    p["head_tilt"] = -9 * lean
+    p["head_dy"] = 2 * bump(t, 0.62, 0.68) + 2 * bump(t, 0.68, 0.74)
+    p["look"] = gaze(t, [(0.0, (0.0, 0.0)), (0.06, (-1.3, 0.8)), (0.24, (-1.1, 1.0)), (0.62, (-0.6, 0.4)),
+                         (0.8, (-1.4, 0.6)), (0.94, (0.0, 0.0))])
+    p["ear_l"] = ear_flick(t, 0.44, amp=10) + ear_flick(t, 0.54, amp=10) - 6 * lean
+    p["ear_r"] = -4 * lean
+    good = 0.62 < t < 0.78
+    p["eyes"] = "happy" if good else "open"
+    p["open"] = 1 - blink_shut(t, 0.3, "single", 0.05)
+    p["mouth"] = "smile" if good else ("o" if 0.42 < t < 0.6 else "w")
+    p["blush"] = 0.5
+    p["tail"] = 5 * math.sin(2 * math.pi * t * 1.5) + 10 * math.sin(2 * math.pi * t * 4) * window(t, 0.62, 0.66, 0.76, 0.8)
+    ex = []
+    sx_, sy_ = to_canvas((30, 98))
+    f = _floating(t, "sparkle", sx_, sy_, rise=6, delay=0.64, life=0.16, size=0.9, drift=0, rot=90 * t)
+    if f:
+        ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def refuel(i, n):
+    """Fills up: holds the fuel nozzle to the car and watches the gauge needle climb from E to F, click — full."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    hold = window(t, 0.04, 0.14, 0.8, 0.9, ease_in_out)
+    s = pop_in_out(t, 0.06, 0.15, 0.8, 0.88)
+    flow = window(t, 0.22, 0.26, 0.66, 0.7)
+    buzz = 0.5 * math.sin(i * 2.1) * flow
+    hand = paw(1, (94 + buzz, 92 + 0.6 * buzz), hold)
+    if s > 0.01:
+        noz = dict(x=hand["x"], y=hand["y"], rot=8, scale=1.15 * s)
+        p["props"] = [dict(noz, kind="hose", back=True, to=(82, 118), ctrl=(120, 124)),
+                      dict(noz, kind="nozzle", squeeze=flow)]
+    p["arm"] = raised(hand)
+    level = lerp(0.08, 1.0, ease_in_out(clamp((t - 0.25) / 0.42)))
+    full = 0.68 < t < 0.86
+    hop(p, t, 0.69, 0.77, 3, prep=0.04, settle=0.08)
+    p["look"] = gaze(t, [(0.0, (0.0, 0.0)), (0.1, (1.0, 0.3)), (0.22, (1.0, -1.0)), (0.6, (0.8, -1.1)),
+                         (0.86, (0.0, 0.0))])
+    p["head_tilt"] = 5 * window(t, 0.2, 0.28, 0.66, 0.74)
+    p["ear_l"] = ear_flick(t, 0.4, amp=8) - 5 * flow
+    p["ear_r"] = ear_flick(t, 0.69, amp=12)
+    p["eyes"] = "happy" if full else "open"
+    p["open"] = 1 - blink_shut(t, 0.46, "single", 0.05)
+    p["mouth"] = "smile" if full else ("o" if 0.3 < t < 0.6 else "w")
+    p["blush"] = 0.5 + 0.2 * full
+    p["tail"] = 6 * math.sin(2 * math.pi * t * 3) * flow + 14 * math.sin(2 * math.pi * t * 4) * window(t, 0.68, 0.72, 0.82, 0.88)
+    gop = window(t, 0.06, 0.12, 0.86, 0.94)
+    ex = []
+    if gop > 0.01:
+        ex.append(dict(kind="gauge", x=100, y=26, scale=pop_in_out(t, 0.06, 0.14, 0.86, 0.95) * (1 + 0.12 * bump(t, 0.67, 0.75)),
+                       level=level, opacity=gop))
+    for dx, d in ((-10, 0.68), (10, 0.71)):
+        f = _floating(t, "sparkle", 100 + dx, 18, rise=5, delay=d, life=0.14, size=0.8, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    nt = _floating(t, "note", 30, 44, rise=14, delay=0.36, life=0.22, size=0.8, color=NOTE_COLORS[1])
+    if nt:
+        ex.append(nt)
+    p["extras"] = ex
+    return p
+
+
+def car_wash(i, n):
+    """Scrubs the car with a foamy sponge in circles while bubbles float up, then admires the shine."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    hold = window(t, 0.04, 0.13, 0.84, 0.94, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.14, 0.84, 0.92)
+    scrub = window(t, 0.16, 0.22, 0.66, 0.72, ease_in_out)
+    a = 2 * math.pi * 3 * clamp((t - 0.16) / 0.56)
+    spot = (100 + 7 * math.cos(a), 82 + 6 * math.sin(a))
+    hand = paw(1, (lerp(92, spot[0], scrub), lerp(96, spot[1], scrub)), hold)
+    if s > 0.01:
+        p["props"] = [dict(kind="sponge", x=hand["x"] + 4 * s, y=hand["y"] - 4 * s, rot=10 * math.sin(a) * scrub,
+                           scale=s, foam=ramp(t, 0.18, 0.4), front=True)]
+    p["arm"] = raised(hand)
+    p["lean"] = 2.5 * math.cos(a) * scrub + 1.5 * scrub
+    p["dx"] = 0.8 * math.cos(a) * scrub
+    p["head_tilt"] = 5 * scrub + 2 * math.sin(a) * scrub
+    admire = window(t, 0.72, 0.76, 0.82, 0.86)
+    p["sy"] *= 1 + 0.03 * admire
+    p["eyes"] = "happy" if scrub > 0.5 else "open"
+    p["look"] = (1.2 * admire + 0.6 * (1 - scrub) * hold, -0.3 * admire)
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.05)
+    p["mouth"] = "smile" if scrub > 0.5 or admire > 0.5 else "w"
+    p["blush"] = 0.5 + 0.25 * scrub
+    p["tail"] = 4 * math.sin(2 * math.pi * t) + 12 * math.sin(2 * math.pi * t * 3) * scrub
+    p["ear_l"] = 4 * math.sin(a) * scrub
+    ex = []
+    for k in range(9):
+        d = 0.2 + 0.055 * k
+        bx, by = to_canvas((100 + 7 * math.cos(2 * math.pi * 3 * clamp((d - 0.16) / 0.56)), 76))
+        f = _floating(t, "bubble", bx + (k % 3 - 1) * 4, by, rise=22, delay=d, life=0.22, size=0.6 + 0.15 * (k % 3), drift=2.5)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((112, 64, 0.72), (98, 50, 0.76), (114, 90, 0.8)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=4, delay=d, life=0.16, size=0.9, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def arrival(i, n):
+    """The trip is over: hops twice waving a chequered flag, sparkles all around."""
+    t = i / n
+    p = default_pose()
+    hold = window(t, 0.04, 0.16, 0.8, 0.92, ease_in_out)
+    s = pop_in_out(t, 0.06, 0.16, 0.8, 0.9)
+    wave = math.sin(2 * math.pi * (t - 0.16) * 4) * window(t, 0.16, 0.22, 0.72, 0.8)
+    hand = paw(-1, (28 + 4 * wave, 64 - 2 * abs(wave)), hold)
+    if s > 0.01:
+        p["props"] = [dict(kind="flag", x=hand["x"], y=hand["y"], rot=-12 * wave, scale=s, wave=2 * math.pi * t * 5, side=-1)]
+    p["arm"] = raised(hand)
+    hop(p, t, 0.3, 0.44, 8)
+    hop(p, t, 0.52, 0.66, 6)
+    p["lean"] += 2.5 * wave
+    p["head_tilt"] = -5 * hold + 2 * wave
+    p["ear_out"] += 4 * hold
+    party = 0.14 < t < 0.84
+    p["eyes"] = "happy" if party else "open"
+    p["mouth"] = "open" if party else "w"
+    p["mouth_open"] = 0.9
+    p["blush"] = 0.5 + 0.3 * hold
+    p["tail"] = 18 * math.sin(2 * math.pi * t * 4) * hold + 3 * math.sin(2 * math.pi * t)
+    ex = []
+    for sx_, sy_, d in ((104, 28, 0.2), (100, 70, 0.32), (20, 84, 0.44), (108, 46, 0.56), (88, 18, 0.66)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=7, delay=d, life=0.22, size=1.0, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    h = _floating(t, "heart", 100, 40, rise=18, delay=0.6, life=0.24, size=0.7)
+    if h:
+        ex.append(h)
+    p["extras"] = ex
+    return p
+
+
+def pothole(i, n):
+    """A bump in the road: jolted up with ears flapping and round eyes, lands with a wobble, then a sigh of relief."""
+    t = i / n
+    p = default_pose()
+    hop(p, t, 0.1, 0.3, 9, prep=0.04, settle=0.16)
+    wob = math.sin(2 * math.pi * (t - 0.3) * 3.5) * math.exp(-4 * max(0.0, t - 0.3)) * ramp(t, 0.3, 0.34)
+    wob *= 1 - ramp(t, 0.8, 0.95)
+    p["lean"] = 5 * wob
+    p["dx"] = 1.2 * wob
+    flap = bump(t, 0.1, 0.3)
+    p["ear_l"] = -16 * flap + 6 * wob
+    p["ear_r"] = 16 * flap + 6 * wob
+    p["ear_scale"] = 1 + 0.08 * flap
+    scared = ramp(t, 0.06, 0.1) * (1 - ramp(t, 0.62, 0.7))
+    p["tail"] = -14 * scared + 4 * wob
+    p["tail_curl"] = 0.6 * scared
+    p["eyes"] = "wide" if 0.08 < t < 0.6 else "open"
+    p["open"] = 1 - 0.3 * ramp(t, 0.66, 0.74) * (1 - ramp(t, 0.86, 0.96))
+    p["mouth"] = "o" if 0.08 < t < 0.6 else "w"
+    p["blush"] = 0.3
+    ex = []
+    sh = bump(t, 0.06, 0.3)
+    if sh > 0:
+        ex.append(dict(kind="shock", x=26, y=112, scale=0.6 + 0.5 * sh, opacity=min(1.0, sh * 2), angles=(150, 180, 210)))
+        ex.append(dict(kind="shock", x=100, y=112, scale=0.6 + 0.5 * sh, opacity=min(1.0, sh * 2), angles=(-30, 0, 30)))
+    sw = clamp((t - 0.3) / 0.45)
+    if 0 < sw < 1:
+        ex.append(dict(kind="sweat", x=24, y=36 + 10 * sw, scale=0.9, opacity=ramp(sw, 0, 0.1) * (1 - ramp(sw, 0.75, 1.0))))
+    pf = _floating(t, "puff", 40, 84, rise=8, delay=0.68, life=0.26, size=0.8, drift=-2)
+    if pf:
+        ex.append(pf)
+    p["extras"] = ex
+    return p
+
+
+def parking(i, n):
+    """Parks: looks back over its shoulder, turns the wheel hard while the parking sensor beeps, stops — P."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    hold = window(t, 0.03, 0.12, 0.86, 0.96, ease_in_out)
+    s = pop_in_out(t, 0.04, 0.12, 0.86, 0.94)
+    turn = keys(t, [(0.16, 0.0), (0.26, -40.0), (0.38, -40.0), (0.48, 32.0), (0.58, 32.0), (0.66, 0.0)])
+    _wheel_hands(p, t, s, hold, turn)
+    back = window(t, 0.12, 0.2, 0.58, 0.66, ease_in_out)
+    p["head_tilt"] = 9 * back + 0.06 * turn
+    p["look"] = (1.6 * back, -0.3 * back - 0.3 * hold * (1 - back))
+    p["lean"] = 0.06 * turn + 2 * back
+    p["ear_r"] = -10 * back
+    p["ear_l"] = 6 * back
+    stop = bump(t, 0.6, 0.66)
+    p["sy"] *= 1 - 0.04 * stop
+    p["head_dy"] = 2 * bump(t, 0.68, 0.76)
+    done = 0.66 < t < 0.86
+    p["eyes"] = "happy" if done else "open"
+    p["open"] = 1 - blink_shut(t, 0.1, "single", 0.04)
+    p["mouth"] = "smile" if done else ("o" if 0.44 < t < 0.6 else "w")
+    p["blush"] = 0.5 + 0.2 * done
+    p["tail"] = 4 * math.sin(2 * math.pi * t) + 10 * math.sin(2 * math.pi * t * 4) * window(t, 0.66, 0.7, 0.8, 0.86)
+    ex = []
+    u = clamp((t - 0.3) / 0.3)
+    beep = max(0.0, math.sin(2 * math.pi * (3 * u + 5 * u * u))) if 0 < u < 1 else 0.0
+    if beep > 0.05:
+        ex.append(dict(kind="waves", x=110, y=72, scale=0.8 + 0.3 * u, opacity=beep, side=1))
+    ps = pop_in_out(t, 0.62, 0.68, 0.86, 0.94)
+    if ps > 0.01:
+        ex.append(dict(kind="psign", x=24, y=26, scale=ps, opacity=min(1.0, ps * 1.5)))
+    f = _floating(t, "sparkle", 34, 16, rise=5, delay=0.66, life=0.16, size=0.8, drift=0, rot=90 * t)
+    if f:
+        ex.append(f)
+    p["extras"] = ex
+    return p
+
+
 EMOTIONS = {
     # file suffix: (pose function, frame count)
     "idle_small": (idle_small, 60),
@@ -2175,6 +2913,17 @@ EMOTIONS = {
     "paw_wave": (paw_wave, 60),
     "confused": (confused, 75),
     "proud": (proud, 75),
+    # car companion
+    "driving": (driving, 100),
+    "seatbelt": (seatbelt, 90),
+    "navigator": (navigator, 150),
+    "mechanic": (mechanic, 150),
+    "tire_check": (tire_check, 150),
+    "refuel": (refuel, 150),
+    "car_wash": (car_wash, 150),
+    "arrival": (arrival, 100),
+    "pothole": (pothole, 60),
+    "parking": (parking, 150),
 }
 
 
@@ -2223,8 +2972,17 @@ def save_preview(all_frames, out_dir):
 WAVE3 = ["tail_hide", "grooming", "butterfly", "curl_up", "sleep_curled", "wake_curled",
          "tease", "sneeze", "listen", "paw_wave", "confused", "proud"]
 
+# Car companion animations (shown first in the gallery, checked by test_generate.py).
+CAR = ["driving", "seatbelt", "navigator", "mechanic", "tire_check", "refuel", "car_wash",
+       "arrival", "pothole", "parking"]
+
 # Where each animation is used (see AnimationPools in the app); shown in the gallery.
 USAGE = {
+    "driving": "AUTO · CALM while driving", "seatbelt": "AUTO · TRIP_PREPARE",
+    "navigator": "AUTO · TRIP_PREPARE, CALM parked", "mechanic": "AUTO · CALM parked, rare",
+    "tire_check": "AUTO · CALM parked", "refuel": "AUTO · CALM parked", "car_wash": "AUTO · CALM parked, rare",
+    "arrival": "AUTO · ARRIVAL", "pothole": "preview only (no trigger yet)",
+    "parking": "AUTO · ARRIVAL, CALM parked",
     "tail_hide": "CALM · scene", "grooming": "CALM · scene", "butterfly": "CALM · scene",
     "sneeze": "CALM, FIDGET", "listen": "CALM, FIDGET", "confused": "CALM",
     "tease": "TAP", "paw_wave": "TAP", "proud": "TAP, HEARTS",
@@ -2267,8 +3025,9 @@ def write_gallery(path, names):
         fn, n = EMOTIONS[name]
         f = os.path.join(OUT_DIR, f"fox_{name}.webp")
         kb = os.path.getsize(f) // 1024 if os.path.exists(f) else 0
+        group = "car" if name in CAR else ("wave3" if name in WAVE3 else "")
         cards.append(dict(name=name, src=f"{rel}/fox_{name}.webp", frames=n, ms=n * FRAME_MS, kb=kb,
-                          desc=describe(name), use=USAGE.get(name, ""), new=name in WAVE3))
+                          desc=describe(name), use=USAGE.get(name, ""), group=group))
     import json
     html = GALLERY_HTML.replace("__CARDS__", json.dumps(cards, ensure_ascii=False))
     with open(path, "w", encoding="utf-8") as fh:
@@ -2298,7 +3057,7 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 </style></head><body>
 <header><h1>Лисёнок — анимации</h1>
 <div class="meta">Animated WebP прямо из <code>app/src/main/res/raw</code>. Нажмите на карточку, чтобы посмотреть отдельно.</div>
-<div class="bar" id="filters"><button data-f="new" aria-pressed="true">Новые (волна 3)</button><button data-f="all" aria-pressed="false">Все</button>
+<div class="bar" id="filters"><button data-f="car" aria-pressed="true">Автомобиль</button><button data-f="wave3" aria-pressed="false">Волна 3</button><button data-f="all" aria-pressed="false">Все</button>
 <span style="flex:1"></span><button data-bg="" aria-pressed="true">Светлый фон</button><button data-bg="dark" aria-pressed="false">Тёмный</button><button data-bg="checker" aria-pressed="false">Прозрачность</button></div>
 </header>
 <main id="grid"></main>
@@ -2307,15 +3066,15 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 <div class="row"><button id="replay">↻ Сначала</button><button id="prev">← Пред.</button><button id="next">След. →</button><span style="flex:1"></span><button id="close">Закрыть</button></div></dialog>
 <script>
 const CARDS = __CARDS__;
-let filter = "new", bg = "", shown = [], cur = 0;
+let filter = "car", bg = "", shown = [], cur = 0;
 const grid = document.getElementById("grid"), dlg = document.getElementById("dlg");
 function render() {
-  shown = CARDS.filter(c => filter === "all" || c.new);
+  shown = CARDS.filter(c => filter === "all" || c.group === filter);
   grid.innerHTML = "";
   shown.forEach((c, k) => {
     const b = document.createElement("button"); b.className = "card";
     b.innerHTML = `<div class="stage ${bg}"><img loading="lazy" src="${c.src}" alt="${c.name}"></div>
-      <div class="name">${c.name}${c.new ? '<span class="badge">new</span>' : ""}</div>
+      <div class="name">${c.name}${c.group === "car" ? '<span class="badge">new</span>' : ""}</div>
       <div class="meta">${c.use || "&nbsp;"}</div><div class="meta">${(c.ms / 1000).toFixed(1)} с · ${c.frames} кадров · ${c.kb} KB</div>`;
     b.onclick = () => open(k); grid.appendChild(b);
   });
@@ -2361,6 +3120,8 @@ def main():
     only = [a for a in args if a in EMOTIONS]
     if "--wave3" in args:
         only += WAVE3
+    if "--car" in args:
+        only += CAR
     all_frames = {}
     for name, (fn, n) in EMOTIONS.items():
         if only and name not in only:
@@ -2380,7 +3141,7 @@ def main():
         os.makedirs(preview_dir, exist_ok=True)
         save_preview(all_frames, preview_dir)
     if gallery:
-        names = WAVE3 + [k for k in EMOTIONS if k not in WAVE3]
+        names = CAR + WAVE3 + [k for k in EMOTIONS if k not in WAVE3 and k not in CAR]
         write_gallery(gallery, names)
         print(f"gallery: {gallery}")
 
