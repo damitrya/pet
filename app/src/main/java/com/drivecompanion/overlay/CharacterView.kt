@@ -1,17 +1,21 @@
 package com.drivecompanion.overlay
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.ImageDecoder
 import android.graphics.drawable.Animatable2
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
+import android.os.Debug
 import android.util.AttributeSet
+import android.util.Log
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
 import com.drivecompanion.data.SettingsRepository
+import com.drivecompanion.state.AnimationDirector
 import com.drivecompanion.state.AnimationPools
 import com.drivecompanion.state.AnimationVariant
 import com.drivecompanion.state.CompanionState
@@ -52,6 +56,9 @@ class CharacterView @JvmOverloads constructor(
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
 
+    /** Chooses the variants (mood, context, variety). Without it the plain [AnimationPools] are used. */
+    var director: AnimationDirector? = null
+
     init {
         setBackgroundColor(0x00000000)
         addView(lottieView)
@@ -61,6 +68,8 @@ class CharacterView @JvmOverloads constructor(
     fun setState(state: CompanionState) {
         if (state == currentState) return
         currentState = state
+        imageView.animate().cancel()      // a scene cut may be fading out
+        imageView.alpha = 1f
 
         if (state.rawVideoResName != null) {
             showVideo(state)
@@ -97,9 +106,16 @@ class CharacterView @JvmOverloads constructor(
      */
     private fun playVideo(state: CompanionState) {
         val pool = AnimationPools.forState(state)
-        val variant = pool.pick { resolveVariant(it) != 0 }
+        val isAvailable = { v: AnimationVariant -> resolveVariant(v) != 0 }
+        val director = director
+        val variant = if (director != null) director.pick(state, isAvailable) else pool.pick(isAvailable)
         val resId = variant?.let { resolveVariant(it) } ?: 0
-        if (resId == 0) { setFallbackAnimation(state); return }
+        if (resId == 0) {
+            setFallbackAnimation(state)
+            // Nothing to play: a one-shot must still end, or the state machine would wait for it.
+            if (!state.isLooping) post { if (currentState == state) oneShotAnimationEndListener?.invoke(state) }
+            return
+        }
 
         val drawable = obtainDrawable(resId)
         val previous = imageView.drawable as? AnimatedImageDrawable
@@ -121,7 +137,10 @@ class CharacterView @JvmOverloads constructor(
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
                         post {
-                            if (isRealEnd(d) && currentState == state) playVideo(state)
+                            if (isRealEnd(d) && currentState == state) {
+                                if (variant != null) director?.onFinished(state, variant)
+                                playVideo(state)
+                            }
                         }
                     }
                 })
@@ -131,13 +150,31 @@ class CharacterView @JvmOverloads constructor(
                     registerAnimationCallback(object : Animatable2.AnimationCallback() {
                         override fun onAnimationEnd(d: Drawable?) {
                             post {
-                                if (isRealEnd(d)) oneShotAnimationEndListener?.invoke(state)
+                                if (isRealEnd(d)) {
+                                    // The director continues a sequence (curl_up → sleep_curled) only from here.
+                                    if (variant != null) director?.onFinished(state, variant)
+                                    oneShotAnimationEndListener?.invoke(state)
+                                }
                             }
                         }
                     })
                 }
             }
             start()
+        }
+    }
+
+    /**
+     * Replaces the running variant of a looping state at once (the car started moving during a scene).
+     * A short fade hides the jump between poses; the director then picks a calm variant.
+     */
+    fun cutScene() {
+        val state = currentState ?: return
+        if (!state.isLooping || state.rawVideoResName == null) return
+        imageView.animate().cancel()
+        imageView.animate().alpha(0f).setDuration(CUT_FADE_MS).withEndAction {
+            if (currentState == state) playVideo(state)
+            imageView.animate().alpha(1f).setDuration(CUT_FADE_MS)
         }
     }
 
@@ -154,8 +191,42 @@ class CharacterView @JvmOverloads constructor(
      */
     private fun obtainDrawable(resId: Int): Drawable =
         drawableCache.getOrPut(resId) {
+            decodes++
             ImageDecoder.decodeDrawable(ImageDecoder.createSource(context.resources, resId))
         }
+
+    /** Cache misses since the view was created (memory log in debug builds). */
+    private var decodes = 0
+
+    private val debuggable = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
+    /**
+     * Debug builds only: every [MEMORY_LOG_MS] logs the decoded-animation cache and the process heaps
+     * (`adb logcat -s DriveCompanionMem`), to watch memory over a long session.
+     */
+    private val memoryLog = object : Runnable {
+        override fun run() {
+            val rt = Runtime.getRuntime()
+            Log.d(
+                MEMORY_TAG,
+                "cached=${drawableCache.size}/$MAX_CACHED_DRAWABLES decodes=$decodes " +
+                    "javaUsedKb=${(rt.totalMemory() - rt.freeMemory()) / 1024} " +
+                    "nativeHeapKb=${Debug.getNativeHeapAllocatedSize() / 1024} state=$currentState"
+            )
+            postDelayed(this, MEMORY_LOG_MS)
+        }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (debuggable) postDelayed(memoryLog, MEMORY_LOG_MS)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(memoryLog)
+        imageView.animate().cancel()
+        super.onDetachedFromWindow()
+    }
 
     /** Raw resource for the variant: its own file, else its fallback, else 0 (variant unavailable). */
     private fun resolveVariant(variant: AnimationVariant): Int {
@@ -206,5 +277,8 @@ class CharacterView @JvmOverloads constructor(
 
     companion object {
         private const val MAX_CACHED_DRAWABLES = 12
+        private const val CUT_FADE_MS = 120L
+        private const val MEMORY_LOG_MS = 60_000L
+        private const val MEMORY_TAG = "DriveCompanionMem"
     }
 }

@@ -3,10 +3,10 @@ package com.drivecompanion.data
 import android.content.Context
 import android.content.SharedPreferences
 
-class SettingsRepository(context: Context) {
+class SettingsRepository(private val prefs: SharedPreferences) {
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("drivecompanion_prefs", Context.MODE_PRIVATE)
+    constructor(context: Context) :
+        this(context.getSharedPreferences("drivecompanion_prefs", Context.MODE_PRIVATE))
 
     companion object {
         // Overlay

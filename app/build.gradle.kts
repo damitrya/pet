@@ -37,6 +37,11 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    testOptions {
+        // State logic tests run on the JVM; android.jar stubs return defaults instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -48,4 +53,6 @@ dependencies {
     implementation("com.airbnb.android:lottie:6.3.0")
     implementation("com.google.android.gms:play-services-location:21.1.0")
     implementation("androidx.lifecycle:lifecycle-service:2.7.0")
+
+    testImplementation("junit:junit:4.13.2")
 }

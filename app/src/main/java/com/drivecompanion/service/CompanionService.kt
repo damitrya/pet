@@ -27,6 +27,7 @@ import com.drivecompanion.data.MediaData
 import com.drivecompanion.data.MediaStateProvider
 import com.drivecompanion.data.PhoneCallData
 import com.drivecompanion.data.PhoneCallProvider
+import com.drivecompanion.data.PrefsMoodStore
 import com.drivecompanion.data.ProfileManager
 import com.drivecompanion.data.ProfileSelector
 import com.drivecompanion.data.ScreenData
@@ -40,6 +41,8 @@ import com.drivecompanion.data.TimeDataProvider
 import com.drivecompanion.data.WeatherData
 import com.drivecompanion.data.WeatherDataProvider
 import com.drivecompanion.overlay.OverlayManager
+import com.drivecompanion.state.AnimationDirector
+import com.drivecompanion.state.CharacterMood
 import com.drivecompanion.state.CompanionState
 import com.drivecompanion.state.StateMachine
 import com.drivecompanion.state.WeatherModifier
@@ -92,6 +95,8 @@ class CompanionService : Service(),
     private lateinit var sensorProvider: SensorDataProvider
     private lateinit var mediaProvider: MediaStateProvider
     private lateinit var stateMachine: StateMachine
+    private lateinit var mood: CharacterMood
+    private lateinit var director: AnimationDirector
     private lateinit var overlayManager: OverlayManager
 
     // Daily profile providers
@@ -141,7 +146,12 @@ class CompanionService : Service(),
         accelerometerMonitor = AccelerometerMonitor(this)
         sensorProvider = SensorDataProvider(this)
         mediaProvider = MediaStateProvider(this)
-        stateMachine = StateMachine(settings)
+        mood = CharacterMood(PrefsMoodStore(this))
+        stateMachine = StateMachine(settings, mood = mood)
+        director = AnimationDirector(mood, context = { stateMachine.playContext() })
+        stateMachine.idleBusy = { director.isSceneRunning() }
+        stateMachine.distractingScene = { director.isDistractingSceneRunning() }
+        stateMachine.onSceneCut = { overlayManager.getCharacterView()?.cutScene() }
         overlayManager = OverlayManager(this, settings)
 
         // Daily profile providers
@@ -180,6 +190,7 @@ class CompanionService : Service(),
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> {
+                mood.flush()
                 overlayManager.hide()
                 updateNotification(isVisible = false)
                 return START_STICKY
@@ -192,6 +203,7 @@ class CompanionService : Service(),
             }
             ACTION_TOGGLE -> {
                 if (overlayManager.isVisible()) {
+                    mood.flush()
                     overlayManager.hide()
                     updateNotification(isVisible = false)
                 } else {
@@ -225,6 +237,7 @@ class CompanionService : Service(),
         settings.unregisterChangeListener(settingsListener)
         handler.removeCallbacks(profileRecheck)
         stateMachine.destroy()
+        mood.flush()
         stopProviders()
         overlayManager.hide()
         settings.serviceEnabled = false
@@ -350,7 +363,8 @@ class CompanionService : Service(),
             if (previousProfile == AppProfile.AUTO) stopAutoProviders() else stopDailyProviders()
         }
 
-        // Switch state machine profile
+        // Switch state machine profile; running animation sequences (curled-up sleep) end with it
+        director.reset()
         stateMachine.setProfile(newProfile)
 
         // Start new profile providers
@@ -415,6 +429,8 @@ class CompanionService : Service(),
     private fun setInitialState() {
         overlayManager.getCharacterView()?.let { cv ->
             cv.oneShotAnimationEndListener = { state -> stateMachine.onOneShotCompleted(state) }
+            cv.director = director
+            director.reset()
             cv.setState(CompanionState.CALM)
         }
         overlayManager.onTapListener = { stateMachine.onTap() }
