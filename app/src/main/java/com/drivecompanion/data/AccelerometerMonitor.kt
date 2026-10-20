@@ -56,7 +56,7 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     override fun onSensorChanged(event: SensorEvent) {
         val v = event.values
         when (event.sensor.type) {
-            Sensor.TYPE_GRAVITY -> detector.onGravity(v[0], v[1], v[2])
+            Sensor.TYPE_GRAVITY -> detector.onGravity(v[0], v[1], v[2], SystemClock.elapsedRealtime())
             Sensor.TYPE_LINEAR_ACCELERATION ->
                 if (detector.onLinearAcceleration(v[0], v[1], v[2], SystemClock.elapsedRealtime())) notifyBraking()
         }

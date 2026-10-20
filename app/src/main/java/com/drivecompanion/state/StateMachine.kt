@@ -21,8 +21,8 @@ import kotlin.random.Random
  * Manages automatic BLINK transitions while in CALM state, short FIDGET breaks while dancing
  * to MUSIC, and falls asleep after a long period without interaction.
  *
- * Priorities: ALERT > PET > sharp turns (TURN_LEFT/RIGHT) > interaction one-shots
- * (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) > events (GREETING, TRIP_START, STRETCH) >
+ * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
+ * RELIEF / TRIP_START > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) > GREETING, STRETCH >
  * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, FIDGET, DROWSY, LOW_BATTERY)
  * only start from an ambient state.
  */
@@ -327,11 +327,12 @@ class StateMachine(
 
     /**
      * Sharp turn: the character is thrown to the outside of the turn. Needs real driving speed
-     * ([TURN_MIN_KMH]) so that turning the phone in the hand does not count.
+     * ([TURN_MIN_KMH]) so that turning the phone in the hand does not count. Only interrupts the
+     * states in [TURN_INTERRUPTIBLE]; a skipped turn does not start the cooldown.
      */
     private fun onSharpTurn(direction: TurnDirection) {
         if (direction == TurnDirection.NONE) return
-        if (alertActive || petActive) return
+        if (currentState !in TURN_INTERRUPTIBLE) return
         val now = clock()
         if (now - turnAt < TURN_COOLDOWN_MS) return
         if (lastSpeedKmh < TURN_MIN_KMH) return
@@ -589,6 +590,17 @@ class StateMachine(
 
         /** Time without any activity in CALM before DROWSY (once, ahead of falling asleep). */
         private const val DROWSY_AFTER_MS = 2 * 60_000L
+
+        /**
+         * States a sharp turn may interrupt: ambient states and one-shots nobody asked for.
+         * Reactions to the user (TAP, BOUNCE, ANNOYED, PET, HEARTS, SHY, WAKE), ALERT/RELIEF,
+         * TRIP_START and a running turn are left alone.
+         */
+        private val TURN_INTERRUPTIBLE = setOf(
+            CompanionState.CALM, CompanionState.MUSIC, CompanionState.PHONE_CALL, CompanionState.SLEEP,
+            CompanionState.BLINK, CompanionState.FIDGET, CompanionState.DROWSY, CompanionState.LOW_BATTERY,
+            CompanionState.STRETCH, CompanionState.GREETING, CompanionState.FALL_ASLEEP
+        )
 
         /** Minimum speed and pause between sharp-turn reactions. */
         private const val TURN_MIN_KMH = 20f

@@ -11,6 +11,11 @@ import kotlin.math.sqrt
  * falls, the mean horizontal acceleration points forward or backward. Once learned, braking is
  * the acceleration along that axis dropping below [threshold] — reported instantly.
  *
+ * The axis is dropped when the phone is moved: gravity in phone coordinates turning by more than
+ * [REORIENT_DEG] for [REORIENT_MS] (taken out of the holder, tilted, turned over), or GPS twice in a
+ * row showing speed changes along a clearly different direction (the holder swivelled around the
+ * vertical, which gravity cannot see).
+ *
  * Before the axis is learned, a strong horizontal jolt at speed is reported only if GPS confirms
  * within [CONFIRM_MS] that the car really slowed down. Without any GPS data the legacy check of
  * the phone's X/Y axes is used (works when the phone lies flat).
@@ -26,6 +31,13 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
     /** Learned forward axis (unit vector, phone coordinates) and how many GPS intervals taught it. */
     private val forward = FloatArray(3)
     private var forwardSamples = 0
+
+    /** Gravity direction (unit) while the axis was learned, and since when it has differed. */
+    private val axisGravity = FloatArray(3)
+    private var reorientSince = 0L
+
+    /** Consecutive GPS lessons that contradicted the learned axis. */
+    private var disagreements = 0
 
     /** Horizontal acceleration summed over the current GPS interval (for learning). */
     private val sumH = FloatArray(3)
@@ -56,12 +68,35 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         joltActive = false
         lastSpeedKmh = -1f
         lastSpeedAt = 0L
-        // The learned axis is kept: the phone usually stays in the same holder.
+        // The learned axis is kept (the phone usually stays in the same holder); if it was moved,
+        // onGravity() and learn() notice and drop the axis.
     }
 
-    fun onGravity(x: Float, y: Float, z: Float) {
+    /** Forget the learned forward axis; it is learned again on the next speed changes. */
+    fun forgetAxis() {
+        forwardSamples = 0
+        disagreements = 0
+        reorientSince = 0L
+        wasBraking = false
+    }
+
+    fun onGravity(x: Float, y: Float, z: Float, now: Long) {
         gravity[0] = x; gravity[1] = y; gravity[2] = z
         hasGravity = true
+        if (forwardSamples == 0) return
+        val g = norm(gravity)
+        if (g < 1f) return
+        if (norm(axisGravity) < 0.5f) {
+            rememberGravity()   // the axis was learned before the first gravity reading
+            return
+        }
+        val cos = (x * axisGravity[0] + y * axisGravity[1] + z * axisGravity[2]) / g
+        if (cos < REORIENT_COS) {
+            if (reorientSince == 0L) reorientSince = now
+            if (now - reorientSince >= REORIENT_MS) forgetAxis()
+        } else {
+            reorientSince = 0L
+        }
     }
 
     /** Linear acceleration sample (gravity excluded). Returns true when sharp braking starts. */
@@ -125,13 +160,33 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         val n = norm(mean)
         if (n < LEARN_MIN_ACCEL) return
         val sign = if (dv > 0) 1f else -1f
+        val dir = FloatArray(3) { sign * mean[it] / n }
+
+        if (forwardSamples > 0) {
+            val agree = dir[0] * forward[0] + dir[1] * forward[1] + dir[2] * forward[2]
+            if (agree < DISAGREE_COS) {
+                // One odd lesson can be a turn while braking; two in a row mean the phone moved.
+                if (++disagreements < MAX_DISAGREEMENTS) return
+                forgetAxis()
+            } else {
+                disagreements = 0
+            }
+        }
+
         for (i in 0..2) {
-            val dir = sign * mean[i] / n
-            forward[i] = if (forwardSamples == 0) dir else forward[i] * 0.8f + dir * 0.2f
+            forward[i] = if (forwardSamples == 0) dir[i] else forward[i] * 0.8f + dir[i] * 0.2f
         }
         val fn = norm(forward)
         if (fn > 1e-3f) for (i in 0..2) forward[i] /= fn
         forwardSamples++
+        rememberGravity()
+    }
+
+    private fun rememberGravity() {
+        val g = norm(gravity)
+        if (!hasGravity || g < 1f) return
+        for (i in 0..2) axisGravity[i] = gravity[i] / g
+        reorientSince = 0L
     }
 
     private fun horizontal(): FloatArray {
@@ -167,6 +222,15 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         /** Fallback confirmation: the speed must drop this much within this time. */
         private const val CONFIRM_DROP_KMH = 4f
         private const val CONFIRM_MS = 2500L
+
+        /** Gravity turning more than this (degrees) for this long means the phone was moved. */
+        private const val REORIENT_DEG = 30.0
+        private val REORIENT_COS = kotlin.math.cos(Math.toRadians(REORIENT_DEG)).toFloat()
+        private const val REORIENT_MS = 1000L
+
+        /** A GPS lesson more than 60° off the learned axis contradicts it; two in a row reset it. */
+        private const val DISAGREE_COS = 0.5f
+        private const val MAX_DISAGREEMENTS = 2
 
         /** GPS fixes come once a second; closer speed reports are duplicates. */
         private const val MIN_SPEED_INTERVAL_MS = 500L
