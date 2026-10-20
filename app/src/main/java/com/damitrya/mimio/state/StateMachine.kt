@@ -6,6 +6,7 @@ import com.damitrya.mimio.data.AppProfile
 import com.damitrya.mimio.data.AppUsageData
 import com.damitrya.mimio.data.BatteryData
 import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.GpsFixGate
 import com.damitrya.mimio.data.MediaData
 import com.damitrya.mimio.data.PhoneCallData
 import com.damitrya.mimio.data.ScreenData
@@ -118,8 +119,8 @@ class StateMachine(
     private var lastSpeedKmh: Float = 0f
     private var lastSpeedAt: Long = 0L
 
-    /** Number of the last location fix seen ([DrivingData.fixSeq]); sensor events repeat it. */
-    private var lastFixSeq: Long = 0L
+    /** New usable GPS fixes only (sensor events repeat the last one); same rule as the service. */
+    private val fixGate = GpsFixGate()
 
     /** When the car came to a stop (0 = moving or unknown). */
     private var stoppedSince: Long = 0L
@@ -183,7 +184,8 @@ class StateMachine(
         music = musicPlaying,
         sinceInteractionMs = if (lastInteractionAt == 0L) Long.MAX_VALUE else clock() - lastInteractionAt,
         car = profile == AppProfile.AUTO,
-        parked = profile == AppProfile.AUTO && trip.standingFor(SHORT_STOP_MS),
+        // A long stop in the middle of a trip (jam, level crossing) is not a parked car.
+        parked = profile == AppProfile.AUTO && trip.phase != TripPhase.DRIVING && trip.standingFor(SHORT_STOP_MS),
         trip = trip.phase
     )
 
@@ -427,9 +429,7 @@ class StateMachine(
         if (!data.hasGpsFix) return
         val now = clock()
         // Braking / turn events repeat the last fix: they must not make an old speed look fresh.
-        val newFix = data.fixSeq > lastFixSeq
-        if (newFix) lastFixSeq = data.fixSeq
-        val usable = newFix && TripTracker.isUsableFix(data.fixAgeMs, data.accuracyM)
+        val usable = fixGate.isNewUsableFix(data)
         if (usable) {
             lastSpeedKmh = data.speedKmh
             lastSpeedAt = now - data.fixAgeMs

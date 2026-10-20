@@ -11,7 +11,7 @@ data class PlayContext(
     val sinceInteractionMs: Long = Long.MAX_VALUE,
     /** AUTO profile: car animations may play. */
     val car: Boolean = false,
-    /** Confirmed standstill: fresh GPS shows the car standing longer than a traffic light. */
+    /** Confirmed parking: fresh GPS shows the car standing longer than a traffic light, and not mid-trip. */
     val parked: Boolean = false,
     /** Phase of the car trip (see [TripTracker]). */
     val trip: TripPhase = TripPhase.PARKED

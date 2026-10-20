@@ -24,10 +24,12 @@ enum class TripEvent { NONE, DEPARTED, ARRIVED }
  *
  * - Getting into the car (AUTO profile) only means PREPARING: a Bluetooth connection is not movement.
  * - DRIVING needs a fresh GPS speed of at least [MOVING_KMH].
- * - ARRIVED needs at least [MIN_TRIP_MS] of driving and then a standstill of [ARRIVAL_STOP_MS] with
- *   GPS fixes all along (a traffic light or a jam is shorter), or the car switching off (its
- *   Bluetooth gone, see [onEngineOff]) after the GPS showed the car standing for [ENGINE_OFF_STOP_MS].
- *   A short trip simply ends PARKED.
+ * - ARRIVED needs at least [MIN_TRIP_MS] of driving and then a confirmation that the car is parked:
+ *   the car switching off (its Bluetooth gone, see [onEngineOff]) after the GPS showed it standing for
+ *   [ENGINE_OFF_STOP_MS] — the usual way — or, without Bluetooth, a standstill of [ARRIVAL_STOP_MS]
+ *   with GPS fixes all along. That is deliberately long: traffic lights, level crossings and most jams
+ *   are shorter, and celebrating in the middle of the route would be worse than celebrating late.
+ *   Without a route, the end of a trip can never be told for sure. A short trip simply ends PARKED.
  * - A gap in the GPS fixes (tunnel, underground car park) restarts the standstill count: the car may
  *   have moved meanwhile. Without GPS nothing happens at all — no trip events are made up.
  */
@@ -137,20 +139,13 @@ class TripTracker(private val clock: () -> Long) {
         /** Driving time that makes a trip worth celebrating at its end. */
         const val MIN_TRIP_MS = 10 * 60_000L
 
-        /** A standstill this long ends the trip; red lights are shorter. */
-        const val ARRIVAL_STOP_MS = 2 * 60_000L
+        /** Without the car switching off, a standstill this long ends the trip (longer than a level crossing). */
+        const val ARRIVAL_STOP_MS = 8 * 60_000L
 
         /** With the car switched off, a standstill this long is enough. */
         const val ENGINE_OFF_STOP_MS = 10_000L
 
         /** Getting ready without driving off for this long: just parked. */
         const val PREPARING_MS = 5 * 60_000L
-
-        /** A fix less accurate than this says too little about the speed. */
-        const val MAX_ACCURACY_M = 50f
-
-        /** Whether a fix [ageMs] old with [accuracyM] (0 = unknown) may be used at all. */
-        fun isUsableFix(ageMs: Long, accuracyM: Float): Boolean =
-            ageMs in 0..GPS_STALE_MS && accuracyM <= MAX_ACCURACY_M
     }
 }

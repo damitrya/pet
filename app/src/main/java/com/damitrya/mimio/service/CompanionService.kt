@@ -23,6 +23,7 @@ import com.damitrya.mimio.data.BatteryDataProvider
 import com.damitrya.mimio.data.AccelerometerMonitor
 import com.damitrya.mimio.data.BluetoothTrigger
 import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.GpsFixGate
 import com.damitrya.mimio.data.MediaData
 import com.damitrya.mimio.data.MediaStateProvider
 import com.damitrya.mimio.data.PhoneCallData
@@ -95,6 +96,9 @@ class CompanionService : Service(),
     private lateinit var sensorProvider: SensorDataProvider
     private lateinit var mediaProvider: MediaStateProvider
     private lateinit var stateMachine: StateMachine
+
+    /** New usable GPS fixes for the braking detector. */
+    private val speedGate = GpsFixGate()
     private lateinit var mood: CharacterMood
     private lateinit var director: AnimationDirector
     private lateinit var overlayManager: OverlayManager
@@ -313,7 +317,9 @@ class CompanionService : Service(),
 
     // SensorDataProvider.Listener
     override fun onDrivingDataChanged(data: DrivingData) {
-        if (data.hasGpsFix) accelerometerMonitor.updateSpeed(data.speedKmh)
+        // Braking / turn events repeat the last fix: the braking detector learns only from new GPS
+        // fixes, by the same rule as the state machine (GpsFixGate).
+        if (speedGate.isNewUsableFix(data)) accelerometerMonitor.updateSpeed(data.speedKmh)
         stateMachine.updateDrivingData(data)
     }
 

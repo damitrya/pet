@@ -72,6 +72,18 @@ class TripTrackerTest {
     }
 
     @Test
+    fun levelCrossingsAndLongJamsAreNotArrivals() {
+        trip.onEnteredCar()
+        drive(50f, 20 * 60_000L)
+        assertEquals("level crossing", emptyList<TripEvent>(), drive(0f, 5 * 60_000L))
+        drive(30f, 2 * 60_000L)
+        assertEquals("jam, crawling now and then", emptyList<TripEvent>(), drive(0f, 6 * 60_000L))
+        drive(5f, 20_000)
+        assertEquals(emptyList<TripEvent>(), drive(0f, 6 * 60_000L))
+        assertEquals(TripPhase.DRIVING, trip.phase)
+    }
+
+    @Test
     fun stopsDoNotCountAsDrivingTime() {
         trip.onEnteredCar()
         drive(50f, 5 * 60_000L)
@@ -84,7 +96,7 @@ class TripTrackerTest {
     fun shortTripEndsParkedWithoutCelebration() {
         trip.onEnteredCar()
         drive(40f, 3 * 60_000L)
-        assertEquals(emptyList<TripEvent>(), drive(0f, 5 * 60_000L))
+        assertEquals(emptyList<TripEvent>(), drive(0f, TripTracker.ARRIVAL_STOP_MS + 60_000))
         assertEquals(TripPhase.PARKED, trip.phase)
     }
 
@@ -93,9 +105,10 @@ class TripTrackerTest {
         trip.onEnteredCar()
         drive(50f, 12 * 60_000L)
         drive(0f, 60_000)
-        clock.advance(5 * 60_000L)                             // tunnel / car park: no fixes
-        assertEquals("the car may have moved meanwhile", emptyList<TripEvent>(), drive(0f, 60_000))
-        assertEquals(listOf(TripEvent.ARRIVED), drive(0f, 70_000))
+        clock.advance(10 * 60_000L)                            // tunnel / car park: no fixes
+        assertEquals("the car may have moved meanwhile", emptyList<TripEvent>(),
+            drive(0f, TripTracker.ARRIVAL_STOP_MS - 10_000))
+        assertEquals(listOf(TripEvent.ARRIVED), drive(0f, 20_000))
     }
 
     @Test
@@ -132,11 +145,11 @@ class TripTrackerTest {
     fun drivingOnAfterArrivalIsANewTrip() {
         trip.onEnteredCar()
         drive(50f, 12 * 60_000L)
-        drive(0f, 3 * 60_000L)
+        drive(0f, TripTracker.ARRIVAL_STOP_MS + 5_000)
         assertEquals(TripPhase.ARRIVED, trip.phase)
         assertEquals(listOf(TripEvent.DEPARTED), drive(20f, 5_000))
         assertEquals(TripPhase.DRIVING, trip.phase)
-        assertEquals("the new trip is short", emptyList<TripEvent>(), drive(0f, 3 * 60_000L))
+        assertEquals("the new trip is short", emptyList<TripEvent>(), drive(0f, TripTracker.ARRIVAL_STOP_MS + 5_000))
         assertEquals(TripPhase.PARKED, trip.phase)
     }
 
@@ -161,17 +174,9 @@ class TripTrackerTest {
     fun fixTimeIsTheTimeOfTheFix() {
         trip.onEnteredCar()
         drive(50f, 12 * 60_000L)
-        drive(0f, 100_000)
+        drive(0f, TripTracker.ARRIVAL_STOP_MS - 20_000)
         clock.advance(30_000)
-        // Delivered now, but taken 25 s ago: the standstill it confirms is 105 s, not 130 s.
+        // Delivered now, but taken 25 s ago: the standstill it confirms is 15 s short, not 10 s over.
         assertEquals(TripEvent.NONE, trip.onGps(0f, clock.now - 25_000))
-    }
-
-    @Test
-    fun usableFixes() {
-        assertTrue(TripTracker.isUsableFix(0, 0f))
-        assertTrue(TripTracker.isUsableFix(2_000, 20f))
-        assertFalse(TripTracker.isUsableFix(TripTracker.GPS_STALE_MS + 1, 5f))
-        assertFalse(TripTracker.isUsableFix(500, TripTracker.MAX_ACCURACY_M + 1))
     }
 }

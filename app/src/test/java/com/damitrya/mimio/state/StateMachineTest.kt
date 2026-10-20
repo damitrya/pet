@@ -332,7 +332,7 @@ class StateMachineTest {
     fun shortTripHasNoArrival() {
         sm.onCarEntered()
         gps(50f, 4 * 60_000L)
-        gps(0f, 5 * 60_000L)
+        gps(0f, TripTracker.ARRIVAL_STOP_MS + 5_000)
         assertFalse(states.contains(CompanionState.ARRIVAL))
         assertEquals(TripPhase.PARKED, sm.tripPhase())
     }
@@ -395,13 +395,25 @@ class StateMachineTest {
     fun parkedOnlyAfterAConfirmedStandstill() {
         assertTrue(sm.playContext().car)
         assertFalse("no GPS yet: unknown, not parked", sm.playContext().parked)
-        gps(40f, 60_000)
+        gps(8f, 60_000)                                     // moving off the drive, not a trip yet
         gps(0f, 30_000)
         assertFalse("traffic light", sm.playContext().parked)
         gps(0f, 40_000)
         assertTrue(sm.playContext().parked)
         scheduler.advance(TripTracker.GPS_STALE_MS + 1)
         assertFalse("GPS lost: not confirmed any more", sm.playContext().parked)
+    }
+
+    @Test
+    fun aLongStopMidTripIsNeitherParkedNorArrived() {
+        sm.onCarEntered()
+        gps(60f, 20 * 60_000L)
+        gps(0f, 5 * 60_000L)                               // level crossing / jam
+        assertFalse("no car scenes in a jam", sm.playContext().parked)
+        assertFalse("no celebration mid-route", states.contains(CompanionState.ARRIVAL))
+        gps(0f, TripTracker.ARRIVAL_STOP_MS - 5 * 60_000L + 2_000)
+        assertTrue(states.contains(CompanionState.ARRIVAL))
+        assertTrue("now it is parked", sm.playContext().parked)
     }
 
     @Test
