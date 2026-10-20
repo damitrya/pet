@@ -12,6 +12,7 @@ import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
 import com.drivecompanion.data.SettingsRepository
+import com.drivecompanion.state.AnimationDirector
 import com.drivecompanion.state.AnimationPools
 import com.drivecompanion.state.AnimationVariant
 import com.drivecompanion.state.CompanionState
@@ -51,6 +52,9 @@ class CharacterView @JvmOverloads constructor(
 
     /** Called when a non-looping animation finishes playing. */
     var oneShotAnimationEndListener: ((CompanionState) -> Unit)? = null
+
+    /** Chooses the variants (mood, context, variety). Without it the plain [AnimationPools] are used. */
+    var director: AnimationDirector? = null
 
     init {
         setBackgroundColor(0x00000000)
@@ -97,9 +101,16 @@ class CharacterView @JvmOverloads constructor(
      */
     private fun playVideo(state: CompanionState) {
         val pool = AnimationPools.forState(state)
-        val variant = pool.pick { resolveVariant(it) != 0 }
+        val isAvailable = { v: AnimationVariant -> resolveVariant(v) != 0 }
+        val director = director
+        val variant = if (director != null) director.pick(state, isAvailable) else pool.pick(isAvailable)
         val resId = variant?.let { resolveVariant(it) } ?: 0
-        if (resId == 0) { setFallbackAnimation(state); return }
+        if (resId == 0) {
+            setFallbackAnimation(state)
+            // Nothing to play: a one-shot must still end, or the state machine would wait for it.
+            if (!state.isLooping) post { if (currentState == state) oneShotAnimationEndListener?.invoke(state) }
+            return
+        }
 
         val drawable = obtainDrawable(resId)
         val previous = imageView.drawable as? AnimatedImageDrawable
@@ -121,7 +132,10 @@ class CharacterView @JvmOverloads constructor(
                 registerAnimationCallback(object : Animatable2.AnimationCallback() {
                     override fun onAnimationEnd(d: Drawable?) {
                         post {
-                            if (isRealEnd(d) && currentState == state) playVideo(state)
+                            if (isRealEnd(d) && currentState == state) {
+                                if (variant != null) director?.onFinished(state, variant)
+                                playVideo(state)
+                            }
                         }
                     }
                 })

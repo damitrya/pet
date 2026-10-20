@@ -24,12 +24,33 @@ import kotlin.random.Random
  * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
  * RELIEF / TRIP_START > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) > GREETING, STRETCH >
  * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, FIDGET, DROWSY, LOW_BATTERY)
- * only start from an ambient state.
+ * only start from an ambient state; BLINK and dozing off also wait for an idle scene ([idleBusy]).
+ * Which file each state plays is up to [AnimationDirector]; it never changes the state.
+ *
+ * Every one-shot is ended by force after [ONE_SHOT_TIMEOUT_MS] if its end is never reported.
+ * User and car events also feed the [CharacterMood].
  */
 class StateMachine(
     private val settings: SettingsRepository,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val scheduler: Scheduler = HandlerScheduler(),
+    private val random: Random = Random.Default,
+    private val mood: CharacterMood? = null
 ) {
+
+    /** Delayed tasks; the default runs them on the main thread, tests drive them by hand. */
+    interface Scheduler {
+        fun postDelayed(task: Runnable, delayMs: Long)
+        fun cancel(task: Runnable)
+    }
+
+    class HandlerScheduler : Scheduler {
+        private val handler = Handler(Looper.getMainLooper())
+        override fun postDelayed(task: Runnable, delayMs: Long) {
+            handler.postDelayed(task, delayMs)
+        }
+        override fun cancel(task: Runnable) = handler.removeCallbacks(task)
+    }
 
     interface Listener {
         fun onStateChanged(newState: CompanionState, previousState: CompanionState)
@@ -108,14 +129,35 @@ class StateMachine(
     /** When the car left the parking spot; TRIP_START blocked by ALERT/PET is retried until [TRIP_START_RETRY_MS]. */
     private var departedAt: Long = 0L
 
-    private val handler = Handler(Looper.getMainLooper())
+    /** Last tap or long press by the user (for friendlier reactions shortly afterwards). */
+    private var lastInteractionAt: Long = 0L
+
+    /**
+     * True while the character plays a self-started idle scene (see [AnimationDirector.isSceneRunning]).
+     * Blinking and dozing off wait for it; user and car reactions do not.
+     */
+    var idleBusy: () -> Boolean = { false }
+
     private val blinkRunnable = Runnable { triggerBlink() }
+
+    /** One-shot that never reported its end (e.g. the overlay was hidden meanwhile). */
+    private var watchedOneShot: CompanionState? = null
+    private val oneShotWatchdog = Runnable {
+        watchedOneShot?.let { if (it == currentState) onOneShotCompleted(it) }
+    }
 
     fun setListener(listener: Listener?) {
         this.listener = listener
     }
 
     fun getCurrentState(): CompanionState = currentState
+
+    /** Context for [AnimationDirector]: driving, music, recent interaction. */
+    fun playContext(): PlayContext = PlayContext(
+        moving = isConfirmedMoving(),
+        music = musicPlaying,
+        sinceInteractionMs = if (lastInteractionAt == 0L) Long.MAX_VALUE else clock() - lastInteractionAt
+    )
 
     fun setProfile(profile: AppProfile) {
         // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
@@ -141,6 +183,7 @@ class StateMachine(
     fun onOverlayShown() {
         if (alertActive || petActive) return
         lastActivityAt = clock()
+        mood?.onEvent(MoodEvent.GREETING)
         rememberBaseState()
         transitionTo(CompanionState.GREETING)
     }
@@ -206,6 +249,7 @@ class StateMachine(
         petActive = true
         tapQueued = false
         lastActivityAt = clock()
+        lastInteractionAt = lastActivityAt
         cancelBlinkTimer()
         rememberBaseState()
 
@@ -221,6 +265,7 @@ class StateMachine(
         if (currentState != CompanionState.PET) return
         petActive = false
         val now = clock()
+        mood?.onEvent(MoodEvent.PET)
         recentPets.addLast(now)
         while (recentPets.first() < now - SHY_WINDOW_MS) recentPets.removeFirst()
         if (recentPets.size >= SHY_PET_COUNT) {
@@ -248,6 +293,8 @@ class StateMachine(
         val now = clock()
         val previousTap = recentTaps.lastOrNull()
         lastActivityAt = now
+        lastInteractionAt = now
+        mood?.onEvent(MoodEvent.TAP)
         recentTaps.addLast(now)
         while (recentTaps.first() < now - ANNOY_WINDOW_MS) recentTaps.removeFirst()
 
@@ -283,6 +330,7 @@ class StateMachine(
 
     fun destroy() {
         cancelBlinkTimer()
+        scheduler.cancel(oneShotWatchdog)
     }
 
     // Auto profile updates
@@ -348,6 +396,7 @@ class StateMachine(
     private fun onTripStarted(): Boolean {
         if (alertActive || petActive) return false
         lastActivityAt = clock()
+        mood?.onEvent(MoodEvent.TRIP_START)
         tapQueued = false
         rememberBaseState()
         transitionTo(CompanionState.TRIP_START)
@@ -376,7 +425,10 @@ class StateMachine(
         }
 
         if (data.isPlaying && currentState != CompanionState.MUSIC) {
-            if (baseLoopingState != CompanionState.MUSIC) lastActivityAt = clock()
+            if (baseLoopingState != CompanionState.MUSIC) {
+                lastActivityAt = clock()
+                mood?.onEvent(MoodEvent.MUSIC_START)
+            }
             when (currentState) {
                 // MUSIC has priority over CALM/BLINK only
                 CompanionState.CALM, CompanionState.BLINK -> transitionTo(CompanionState.MUSIC)
@@ -512,7 +564,14 @@ class StateMachine(
         }
 
         currentState = newState
+        mood?.setAsleep(newState == CompanionState.SLEEP)
         listener?.onStateChanged(newState, previous)
+
+        scheduler.cancel(oneShotWatchdog)
+        if (!newState.isLooping) {
+            watchedOneShot = newState
+            scheduler.postDelayed(oneShotWatchdog, ONE_SHOT_TIMEOUT_MS)
+        }
 
         when (newState) {
             CompanionState.CALM -> {
@@ -543,6 +602,12 @@ class StateMachine(
             return
         }
         if (currentState != CompanionState.CALM) return
+        if (idleBusy()) {
+            // Let the scene finish; blinking (or dozing off) right after it.
+            scheduler.cancel(blinkRunnable)
+            scheduler.postDelayed(blinkRunnable, SCENE_RETRY_MS)
+            return
+        }
         val now = clock()
         val idleFor = now - lastActivityAt
         val moving = isConfirmedMoving()
@@ -560,19 +625,25 @@ class StateMachine(
     private fun scheduleNextBlink() {
         cancelBlinkTimer()
         val delayMs = if (currentState == CompanionState.MUSIC) {
-            20_000L + Random.nextLong(20_001L)
+            20_000L + random.nextLong(20_001L)
         } else {
-            3000L + Random.nextLong(4001L)
+            3000L + random.nextLong(4001L)
         }
-        handler.postDelayed(blinkRunnable, delayMs)
+        scheduler.postDelayed(blinkRunnable, delayMs)
     }
 
     private fun cancelBlinkTimer() {
-        handler.removeCallbacks(blinkRunnable)
+        scheduler.cancel(blinkRunnable)
     }
 
     companion object {
         private const val ALERT_COOLDOWN_MS = 3000L
+
+        /** A one-shot that has not finished after this long is ended by force (no stuck states). */
+        const val ONE_SHOT_TIMEOUT_MS = 15_000L
+
+        /** While an idle scene plays, the blink timer checks again after this delay. */
+        private const val SCENE_RETRY_MS = 1000L
 
         /** Taps within [ANNOY_WINDOW_MS] that make the companion ANNOYED. */
         private const val ANNOY_TAP_COUNT = 5
