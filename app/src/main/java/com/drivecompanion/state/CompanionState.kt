@@ -53,7 +53,40 @@ enum class CompanionState(
     SLEEP("", true, "sleep"),
 
     /** One-shot waking up, then returns to the looping state (CALM or MUSIC). */
-    WAKE("", false, "wake");
+    WAKE("", false, "wake"),
+
+    /** One-shot jump on a double tap. Replaces the TAP started by the first tap. */
+    BOUNCE("", false, "bounce"),
+
+    /** One-shot embarrassment (paws over the face) instead of HEARTS after several pettings in a row. */
+    SHY("", false, "shy"),
+
+    /** One-shot sleepiness after a long period without activity, shortly before FALL_ASLEEP. */
+    DROWSY("", false, "drowsy"),
+
+    /** One-shot fright on a sharp left turn: the character is thrown to the right (Auto profile). */
+    TURN_LEFT("", false, "turn_left"),
+
+    /** One-shot fright on a sharp right turn: the character is thrown to the left (Auto profile). */
+    TURN_RIGHT("", false, "turn_right"),
+
+    /**
+     * Looping "on the phone" while a call is active. Acts as the ambient state during the call:
+     * one-shots return here, and the call ending returns to MUSIC or CALM.
+     */
+    PHONE_CALL("", true, "phone_call"),
+
+    /** One-shot worry when the battery gets low (not charging). */
+    LOW_BATTERY("", false, "low_battery"),
+
+    /**
+     * One-shot break from dancing: every 20–40 s of MUSIC the character does something else
+     * (blinks, looks around, wags its tail…), then goes back to MUSIC.
+     */
+    FIDGET("", false, "blink"),
+
+    /** One-shot morning stretch on the first unlock of the day (Daily profile). */
+    STRETCH("", false, "stretch");
 }
 
 /**

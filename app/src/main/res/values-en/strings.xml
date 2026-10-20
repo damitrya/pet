@@ -14,6 +14,10 @@
     <string name="action_show">Show</string>
     <string name="action_hide">Hide</string>
     <string name="action_stop">Stop</string>
+    <string name="action_switch_to_auto">In the car</string>
+    <string name="action_switch_to_daily">Out of the car</string>
+    <string name="notification_mode_auto">Auto mode</string>
+    <string name="notification_mode_daily">Daily mode</string>
 
     <!-- Settings Sections -->
     <string name="section_permissions">Permissions</string>
@@ -57,6 +61,10 @@
     <string name="profile_auto_bluetooth">Auto-detect (Bluetooth)</string>
     <string name="label_bluetooth_device">Bluetooth device for auto mode</string>
     <string name="bluetooth_not_selected">Not selected</string>
+    <string name="bluetooth_any_car">Any car stereo</string>
+    <string name="bluetooth_choose_title">Car Bluetooth</string>
+    <string name="bluetooth_no_permission">"Nearby devices" permission is required</string>
+    <string name="bluetooth_hint">Auto mode turns on when the car connects and off 2 minutes after it disconnects</string>
 
     <!-- Daily profile -->
     <string name="label_step_goal">Daily step goal</string>

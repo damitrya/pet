@@ -7,13 +7,11 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 
 /**
- * Monitors the accelerometer for sharp braking events on axes X and Y.
- * Monitoring both horizontal axes ensures detection regardless of how the device is mounted
- * (portrait, landscape, or rotated).
- * Applies a low-pass filter per axis and detects negative-edge crossings of the configured
- * threshold on either axis.
+ * Feeds linear acceleration, gravity and GPS speed into [BrakeDetector] and reports sharp braking.
+ * Works for any phone mount; see [BrakeDetector] for how the car's forward axis is learned.
  * Cooldown and playback-guard logic is handled by [com.drivecompanion.state.StateMachine].
  */
 class AccelerometerMonitor(context: Context) : SensorEventListener {
@@ -25,29 +23,23 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     private var listener: Listener? = null
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val handler = Handler(Looper.getMainLooper())
-
-    private var filteredX: Float = 0f
-    private var filteredY: Float = 0f
-    private var wasBelowX: Boolean = false
-    private var wasBelowY: Boolean = false
-    private var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAKING_THRESHOLD
+    private val detector = BrakeDetector()
 
     fun setListener(listener: Listener?) {
         this.listener = listener
     }
 
     fun setThreshold(threshold: Float) {
-        this.threshold = threshold
+        detector.threshold = threshold
     }
 
     fun start() {
-        filteredX = 0f
-        filteredY = 0f
-        wasBelowX = false
-        wasBelowY = false
-        val accel = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
-        accel?.let {
+        detector.reset()
+        sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+        sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
     }
 
@@ -56,23 +48,22 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
         handler.removeCallbacksAndMessages(null)
     }
 
+    /** GPS speed from [SensorDataProvider]; teaches the forward axis and confirms braking. */
+    fun updateSpeed(speedKmh: Float) {
+        if (detector.onSpeed(speedKmh, SystemClock.elapsedRealtime())) notifyBraking()
+    }
+
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_LINEAR_ACCELERATION) return
-
-        // Low-pass filter to remove sensor noise
-        filteredX = filteredX * 0.8f + event.values[0] * 0.2f
-        filteredY = filteredY * 0.8f + event.values[1] * 0.2f
-
-        val isBelowX = filteredX < threshold
-        val isBelowY = filteredY < threshold
-
-        if ((isBelowX && !wasBelowX) || (isBelowY && !wasBelowY)) {
-            // Either axis just crossed below threshold → sharp braking detected
-            handler.post { listener?.onSharpBraking() }
+        val v = event.values
+        when (event.sensor.type) {
+            Sensor.TYPE_GRAVITY -> detector.onGravity(v[0], v[1], v[2], SystemClock.elapsedRealtime())
+            Sensor.TYPE_LINEAR_ACCELERATION ->
+                if (detector.onLinearAcceleration(v[0], v[1], v[2], SystemClock.elapsedRealtime())) notifyBraking()
         }
+    }
 
-        wasBelowX = isBelowX
-        wasBelowY = isBelowY
+    private fun notifyBraking() {
+        handler.post { listener?.onSharpBraking() }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}

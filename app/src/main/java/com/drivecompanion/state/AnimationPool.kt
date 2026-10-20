@@ -73,20 +73,28 @@ object AnimationPools {
 
     private val pools: Map<CompanionState, AnimationPool> = mapOf(
         CompanionState.CALM to AnimationPool(listOf(
-            AnimationVariant("idle_small", weight = 65),
-            AnimationVariant("idle2", weight = 23, cooldown = 1),   // looks around
-            AnimationVariant("yawn", weight = 6, cooldown = 6),
-            AnimationVariant("ear_scratch", weight = 6, cooldown = 6)
+            AnimationVariant("idle_small", weight = 50),
+            AnimationVariant("idle2", weight = 18, cooldown = 1),   // looks around
+            AnimationVariant("yawn", weight = 5, cooldown = 6),
+            AnimationVariant("ear_scratch", weight = 5, cooldown = 6),
+            AnimationVariant("tail_wag", weight = 7, cooldown = 2),
+            AnimationVariant("stretch", weight = 4, cooldown = 8),
+            AnimationVariant("shake", weight = 4, cooldown = 6),
+            AnimationVariant("tail_play", weight = 4, cooldown = 10),
+            AnimationVariant("surprise", weight = 3, cooldown = 8)
         )),
         CompanionState.BLINK to single("blink"),
         CompanionState.MUSIC to AnimationPool(listOf(
-            AnimationVariant("music", weight = 40),
-            AnimationVariant("music2", weight = 35),
-            AnimationVariant("music_nod", weight = 25, cooldown = 1)
+            AnimationVariant("music", weight = 32),
+            AnimationVariant("music2", weight = 28),
+            AnimationVariant("music_nod", weight = 20, cooldown = 1),
+            AnimationVariant("music_paws", weight = 14, cooldown = 1),
+            AnimationVariant("music_spin", weight = 6, cooldown = 6)
         )),
         CompanionState.TAP to AnimationPool(listOf(
-            AnimationVariant("tap", weight = 60),
-            AnimationVariant("head_tilt", weight = 40, cooldown = 1)
+            AnimationVariant("tap", weight = 45),
+            AnimationVariant("head_tilt", weight = 30, cooldown = 1),
+            AnimationVariant("laugh", weight = 25, cooldown = 1)
         )),
         CompanionState.ALERT to single("alert"),
         CompanionState.PET to single("pet"),
@@ -100,7 +108,27 @@ object AnimationPools {
         CompanionState.TRIP_START to single("trip_start", fallback = "tap"),
         CompanionState.FALL_ASLEEP to single("fall_asleep", fallback = "blink"),
         CompanionState.SLEEP to single("sleep", fallback = "idle_small"),
-        CompanionState.WAKE to single("wake", fallback = "blink")
+        CompanionState.WAKE to single("wake", fallback = "blink"),
+
+        // Wave 2
+        CompanionState.BOUNCE to single("bounce", fallback = "tap"),
+        CompanionState.SHY to single("shy", fallback = "pet"),
+        CompanionState.DROWSY to single("drowsy", fallback = "blink"),
+        CompanionState.TURN_LEFT to single("turn_left", fallback = "alert"),
+        CompanionState.TURN_RIGHT to single("turn_right", fallback = "alert"),
+        CompanionState.PHONE_CALL to single("phone_call", fallback = "idle_small"),
+        CompanionState.LOW_BATTERY to single("low_battery", fallback = "blink"),
+        CompanionState.STRETCH to single("stretch", fallback = "idle2"),
+        CompanionState.FIDGET to AnimationPool(listOf(
+            AnimationVariant("blink", weight = 15),
+            AnimationVariant("idle2", weight = 20, cooldown = 1),
+            AnimationVariant("tail_wag", weight = 20, cooldown = 1),
+            AnimationVariant("ear_scratch", weight = 12, cooldown = 2),
+            AnimationVariant("head_tilt", weight = 12, cooldown = 2),
+            AnimationVariant("shake", weight = 8, cooldown = 3),
+            AnimationVariant("surprise", weight = 7, cooldown = 3),
+            AnimationVariant("tail_play", weight = 6, cooldown = 4)
+        ))
     )
 
     fun forState(state: CompanionState): AnimationPool =

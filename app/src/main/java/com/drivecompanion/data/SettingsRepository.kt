@@ -55,6 +55,9 @@ class SettingsRepository(context: Context) {
         const val CHARACTER_SLIME = "slime"
         const val CHARACTER_FOX = "fox"
 
+        /** [bluetoothDeviceAddress] value meaning "any car audio / hands-free device". */
+        const val BLUETOOTH_ANY_CAR = "any_car"
+
         // Defaults
         const val DEFAULT_SIZE = 150
         const val DEFAULT_OPACITY = 100
@@ -162,7 +165,7 @@ class SettingsRepository(context: Context) {
         get() = prefs.getInt(KEY_LOW_BATTERY_THRESHOLD, DEFAULT_LOW_BATTERY_THRESHOLD)
         set(value) = prefs.edit().putInt(KEY_LOW_BATTERY_THRESHOLD, value).apply()
 
-    /** Acceleration threshold (m/s²) on axis X below which ALERT is triggered. Negative value. */
+    /** Deceleration threshold (m/s², negative) along the car's forward axis that triggers ALERT. */
     var alertBrakingThreshold: Float
         get() = prefs.getFloat(KEY_ALERT_BRAKING_THRESHOLD, DEFAULT_ALERT_BRAKING_THRESHOLD)
         set(value) = prefs.edit().putFloat(KEY_ALERT_BRAKING_THRESHOLD, value).apply()
@@ -183,4 +186,11 @@ class SettingsRepository(context: Context) {
     var nightStart: Int
         get() = prefs.getInt(KEY_NIGHT_START, 22)
         set(value) = prefs.edit().putInt(KEY_NIGHT_START, value).apply()
+
+    /** The listener is held weakly by SharedPreferences: keep a reference to it. */
+    fun registerChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+
+    fun unregisterChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs.unregisterOnSharedPreferenceChangeListener(listener)
 }

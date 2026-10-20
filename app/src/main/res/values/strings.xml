@@ -14,6 +14,10 @@
     <string name="action_show">Показать</string>
     <string name="action_hide">Скрыть</string>
     <string name="action_stop">Остановить</string>
+    <string name="action_switch_to_auto">В машину</string>
+    <string name="action_switch_to_daily">Из машины</string>
+    <string name="notification_mode_auto">Режим «Авто»</string>
+    <string name="notification_mode_daily">Повседневный режим</string>
 
     <!-- Settings Sections -->
     <string name="section_permissions">Разрешения</string>
@@ -57,6 +61,10 @@
     <string name="profile_auto_bluetooth">Автоопределение (Bluetooth)</string>
     <string name="label_bluetooth_device">Bluetooth-устройство для авто</string>
     <string name="bluetooth_not_selected">Не выбрано</string>
+    <string name="bluetooth_any_car">Любая автомагнитола</string>
+    <string name="bluetooth_choose_title">Bluetooth машины</string>
+    <string name="bluetooth_no_permission">Нужно разрешение «Устройства поблизости»</string>
+    <string name="bluetooth_hint">Режим «Авто» включается при подключении к машине и выключается через 2 минуты после отключения</string>
 
     <!-- Daily profile -->
     <string name="label_step_goal">Цель шагов за день</string>

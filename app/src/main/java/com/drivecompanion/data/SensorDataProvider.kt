@@ -54,10 +54,16 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private var isTurning: Boolean = false
     private var turnDirection: TurnDirection = TurnDirection.NONE
 
+    // Gravity direction (phone coordinates), used to get the yaw rate whatever the phone mount
+    private val gravity = FloatArray(3)
+    private var hasGravity: Boolean = false
+    private var yawRate: Float = 0f            // rad/s, filtered; positive = turning left
+    private var turnCandidateSince: Long = 0L  // sensor timestamp (ns) when the threshold was first exceeded
+
     // Thresholds
     private var brakingThreshold: Float = 4.0f  // m/s² longitudinal deceleration
     private var accelerationThreshold: Float = 3.5f
-    private var turnThreshold: Float = 1.5f  // rad/s
+    private var turnThreshold: Float = 3.5f  // m/s² lateral acceleration (speed × yaw rate)
 
     // Smoothing
     private val speedHistory = FloatArray(3)
@@ -116,12 +122,16 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private fun startSensorUpdates() {
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
         val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
+        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
         accelerometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
         gyroscope?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
+        gravitySensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
     }
 
@@ -157,6 +167,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         when (event.sensor.type) {
             Sensor.TYPE_LINEAR_ACCELERATION -> handleAccelerometer(event)
             Sensor.TYPE_GYROSCOPE -> handleGyroscope(event)
+            Sensor.TYPE_GRAVITY -> {
+                event.values.copyInto(gravity, endIndex = 3)
+                hasGravity = true
+            }
         }
     }
 
@@ -185,16 +199,36 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         }
     }
 
+    /**
+     * A turn is sharp when the lateral acceleration (GPS speed × yaw rate) stays above
+     * [turnThreshold] for [TURN_SUSTAIN_NS]. The yaw rate is the rotation around the gravity
+     * vector, so it does not depend on how the phone is mounted (flat, upright, landscape).
+     */
     private fun handleGyroscope(event: SensorEvent) {
-        val z = event.values[2]  // yaw rate (rotation around vertical axis)
+        val rawYaw = if (hasGravity) {
+            val g = sqrt(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2])
+            if (g > 1f) {
+                (event.values[0] * gravity[0] + event.values[1] * gravity[1] + event.values[2] * gravity[2]) / g
+            } else {
+                event.values[2]
+            }
+        } else {
+            event.values[2]  // no gravity sensor: assume the phone lies flat
+        }
+        yawRate = yawRate * 0.8f + rawYaw * 0.2f
 
         val prevTurning = isTurning
         val prevDirection = turnDirection
 
-        if (abs(z) > turnThreshold) {
-            isTurning = true
-            turnDirection = if (z > 0) TurnDirection.LEFT else TurnDirection.RIGHT
+        val lateral = abs(yawRate) * currentSpeed / 3.6f
+        if (lateral > turnThreshold) {
+            if (turnCandidateSince == 0L) turnCandidateSince = event.timestamp
+            if (event.timestamp - turnCandidateSince >= TURN_SUSTAIN_NS) {
+                isTurning = true
+                turnDirection = if (yawRate > 0) TurnDirection.LEFT else TurnDirection.RIGHT
+            }
         } else {
+            turnCandidateSince = 0L
             isTurning = false
             turnDirection = TurnDirection.NONE
         }
@@ -214,5 +248,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
             hasGpsFix = hasGps
         )
         handler.post { listener?.onDrivingDataChanged(data) }
+    }
+
+    companion object {
+        /** Lateral acceleration must stay above the threshold this long (bumps and jolts are shorter). */
+        private const val TURN_SUSTAIN_NS = 300_000_000L
     }
 }
