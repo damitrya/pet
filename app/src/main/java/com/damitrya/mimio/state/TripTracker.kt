@@ -68,9 +68,13 @@ class TripTracker(private val clock: () -> Long) {
         stoppedSince = 0L
     }
 
-    /** A GPS fix with [speedKmh]. Returns [TripEvent.DEPARTED] or [TripEvent.ARRIVED] when the phase changes so. */
-    fun onGps(speedKmh: Float): TripEvent {
-        val now = clock()
+    /**
+     * A new GPS fix with [speedKmh], taken at [at] (only real fixes: sensor events that repeat the
+     * last speed must not come here). Returns [TripEvent.DEPARTED] or [TripEvent.ARRIVED] when the
+     * phase changes so.
+     */
+    fun onGps(speedKmh: Float, at: Long = clock()): TripEvent {
+        val now = at
         val fresh = lastFixAt != 0L && now - lastFixAt <= GPS_STALE_MS
         if (fresh && current == TripPhase.DRIVING && lastSpeedKmh >= STOPPED_KMH) drivingMs += now - lastFixAt
         if (!fresh) stoppedSince = 0L
@@ -141,5 +145,12 @@ class TripTracker(private val clock: () -> Long) {
 
         /** Getting ready without driving off for this long: just parked. */
         const val PREPARING_MS = 5 * 60_000L
+
+        /** A fix less accurate than this says too little about the speed. */
+        const val MAX_ACCURACY_M = 50f
+
+        /** Whether a fix [ageMs] old with [accuracyM] (0 = unknown) may be used at all. */
+        fun isUsableFix(ageMs: Long, accuracyM: Float): Boolean =
+            ageMs in 0..GPS_STALE_MS && accuracyM <= MAX_ACCURACY_M
     }
 }

@@ -13,6 +13,7 @@ import android.location.LocationManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -23,7 +24,16 @@ data class DrivingData(
     val isTurning: Boolean = false,
     val turnDirection: TurnDirection = TurnDirection.NONE,
     val isRapidAcceleration: Boolean = false,
-    val hasGpsFix: Boolean = false
+    val hasGpsFix: Boolean = false,
+    /**
+     * Number of the location fix [speedKmh] comes from; it grows with every new fix. Sensor events
+     * (braking, turns) repeat the last one, so only a larger number means fresh GPS data.
+     */
+    val fixSeq: Long = 0L,
+    /** How old that fix was when this data was sent (the system may deliver cached locations). */
+    val fixAgeMs: Long = 0L,
+    /** Horizontal accuracy of the fix in metres, 0 = unknown. */
+    val accuracyM: Float = 0f
 )
 
 enum class TurnDirection { LEFT, RIGHT, NONE }
@@ -42,6 +52,9 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private var currentSpeed: Float = 0f
     private var previousSpeed: Float = 0f
     private var hasGps: Boolean = false
+    private var fixSeq: Long = 0L
+    private var fixElapsedMs: Long = 0L
+    private var fixAccuracyM: Float = 0f
 
     // Accelerometer data for braking/acceleration detection
     private var lastAccelX: Float = 0f
@@ -138,6 +151,9 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     // LocationListener
     override fun onLocationChanged(location: Location) {
         hasGps = true
+        fixSeq++
+        fixElapsedMs = location.elapsedRealtimeNanos / 1_000_000L
+        fixAccuracyM = if (location.hasAccuracy()) location.accuracy else 0f
         previousSpeed = currentSpeed
         val rawSpeed = location.speed * 3.6f // m/s to km/h
 
@@ -245,7 +261,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
             isTurning = isTurning,
             turnDirection = turnDirection,
             isRapidAcceleration = isRapidAccel,
-            hasGpsFix = hasGps
+            hasGpsFix = hasGps,
+            fixSeq = fixSeq,
+            fixAgeMs = if (fixSeq > 0) (SystemClock.elapsedRealtime() - fixElapsedMs).coerceAtLeast(0L) else 0L,
+            accuracyM = fixAccuracyM
         )
         handler.post { listener?.onDrivingDataChanged(data) }
     }

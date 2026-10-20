@@ -1,6 +1,8 @@
 package com.damitrya.mimio.state
 
 import android.content.SharedPreferences
+import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.TurnDirection
 
 /** Manually advanced time. */
 class FakeClock(var now: Long = 1_000_000L) : () -> Long {
@@ -82,3 +84,21 @@ class InMemoryPrefs : SharedPreferences {
         override fun apply() { commit() }
     }
 }
+
+private var nextFixSeq = 0L
+
+/** A new GPS fix, as SensorDataProvider sends it on onLocationChanged (a fresh fix number). */
+fun gpsFix(
+    kmh: Float,
+    isTurning: Boolean = false,
+    turnDirection: TurnDirection = TurnDirection.NONE,
+    ageMs: Long = 0L,
+    accuracyM: Float = 5f
+) = DrivingData(
+    speedKmh = kmh, isTurning = isTurning, turnDirection = turnDirection, hasGpsFix = true,
+    fixSeq = ++nextFixSeq, fixAgeMs = ageMs, accuracyM = accuracyM
+)
+
+/** A sensor event (braking, turn) between fixes: it repeats the last fix of [previous]. */
+fun sensorEvent(previous: DrivingData, isTurning: Boolean = false, turnDirection: TurnDirection = TurnDirection.NONE) =
+    previous.copy(isTurning = isTurning, turnDirection = turnDirection)

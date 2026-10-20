@@ -48,9 +48,9 @@ class StateMachineTest {
     private fun backgroundNoise() {
         sm.updateBatteryData(BatteryData(level = 5, isLow = true))
         sm.updateTimeData(TimeData(isFirstUnlockOfDay = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 50f, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 50f, isTurning = true, turnDirection = TurnDirection.LEFT, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 50f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(50f))
+        sm.updateDrivingData(gpsFix(50f, isTurning = true, turnDirection = TurnDirection.LEFT))
+        sm.updateDrivingData(gpsFix(50f))
         sm.updateMediaData(MediaData(isPlaying = true))
         sm.updateMediaData(MediaData(isPlaying = false))
         sm.onTap()
@@ -165,7 +165,7 @@ class StateMachineTest {
     @Test
     fun doesNotFallAsleepWhileDriving() {
         repeat(60) {
-            sm.updateDrivingData(DrivingData(speedKmh = 60f, hasGpsFix = true))
+            sm.updateDrivingData(gpsFix(60f))
             scheduler.advance(5_000)
         }
         assertFalse(states.contains(CompanionState.FALL_ASLEEP))
@@ -189,15 +189,15 @@ class StateMachineTest {
         var cuts = 0
         sm.distractingScene = { scene }
         sm.onSceneCut = { cuts++ }
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 12f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
+        sm.updateDrivingData(gpsFix(12f))
         assertEquals(1, cuts)
-        sm.updateDrivingData(DrivingData(speedKmh = 30f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(30f))
         assertEquals("only on the start of movement", 1, cuts)
 
         scene = false
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 20f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
+        sm.updateDrivingData(gpsFix(20f))
         assertEquals("nothing to cut", 1, cuts)
     }
 
@@ -205,11 +205,11 @@ class StateMachineTest {
     fun startingToDriveEndsADistractingFidget() {
         oneShotMs = null
         sm.distractingScene = { true }
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
         sm.updateMediaData(MediaData(isPlaying = true))
         scheduler.advance(41_000)                       // FIDGET break during the music
         assertEquals(CompanionState.FIDGET, state)
-        sm.updateDrivingData(DrivingData(speedKmh = 10f, hasGpsFix = true))   // below the trip-start speed
+        sm.updateDrivingData(gpsFix(10f))   // below the trip-start speed
         assertEquals(CompanionState.MUSIC, state)
     }
 
@@ -219,23 +219,23 @@ class StateMachineTest {
         var cuts = 0
         sm.distractingScene = { true }
         sm.onSceneCut = { cuts++ }
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
         sm.onTap()
-        sm.updateDrivingData(DrivingData(speedKmh = 10f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(10f))
         assertEquals(CompanionState.TAP, state)
         assertEquals(0, cuts)
     }
 
     @Test
     fun shortStopStillCountsAsDriving() {
-        sm.updateDrivingData(DrivingData(speedKmh = 40f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(40f))
         clock.advance(5_000)
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))   // traffic light
+        sm.updateDrivingData(gpsFix(0f))   // traffic light
         clock.advance(30_000)
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
         assertTrue("no scenes at a traffic light", sm.playContext().moving)
         clock.advance(31_000)
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
         assertFalse("a longer stop allows scenes again", sm.playContext().moving)
     }
 
@@ -267,7 +267,7 @@ class StateMachineTest {
         while (t < ms) {
             scheduler.advance(1_000)
             t += 1_000
-            sm.updateDrivingData(DrivingData(speedKmh = kmh, hasGpsFix = true))
+            sm.updateDrivingData(gpsFix(kmh))
         }
     }
 
@@ -296,8 +296,8 @@ class StateMachineTest {
     fun preparingEndsAtOnceWhenTheCarMoves() {
         oneShotMs = null
         sm.onCarEntered()
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 8f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
+        sm.updateDrivingData(gpsFix(8f))
         assertEquals(CompanionState.CALM, state)
     }
 
@@ -376,7 +376,7 @@ class StateMachineTest {
         gps(60f, 12 * 60_000L)
         gps(0f, TripTracker.ARRIVAL_STOP_MS + 1_000)
         assertEquals(CompanionState.ARRIVAL, state)
-        sm.updateDrivingData(DrivingData(speedKmh = 6f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(6f))
         assertEquals(CompanionState.CALM, state)
     }
 
@@ -412,5 +412,89 @@ class StateMachineTest {
         assertTrue(states.isEmpty())
         assertTrue(sm.playContext().car)
         assertEquals(TripPhase.PARKED, sm.tripPhase())
+    }
+    // ---- only real GPS fixes count
+
+    @Test
+    fun sensorEventsDoNotKeepAnOldSpeedFresh() {
+        sm.onCarEntered()
+        gps(60f, 12 * 60_000L)
+        val last = gpsFix(0f)
+        sm.updateDrivingData(last)                   // the car stopped, then GPS is lost
+        repeat(10 * 60) {                             // braking / turn events keep coming, no new fixes
+            scheduler.advance(1_000)
+            sm.updateDrivingData(sensorEvent(last, isTurning = it % 2 == 0))
+        }
+        assertFalse("no arrival without GPS", states.contains(CompanionState.ARRIVAL))
+        assertFalse("not a confirmed stop", sm.playContext().parked)
+        assertFalse(sm.playContext().moving)
+        assertEquals(TripPhase.DRIVING, sm.tripPhase())
+    }
+
+    @Test
+    fun sensorEventsDoNotAddDrivingTime() {
+        sm.onCarEntered()
+        gps(60f, 2 * 60_000L)
+        val last = gpsFix(60f)
+        sm.updateDrivingData(last)
+        repeat(15 * 60) {                             // GPS lost in motion, only sensor events
+            scheduler.advance(1_000)
+            sm.updateDrivingData(sensorEvent(last))
+        }
+        assertFalse("stale speed is not driving", sm.playContext().moving)
+        gps(0f, TripTracker.ARRIVAL_STOP_MS + 5_000)
+        assertFalse("2 min of real driving is a short trip", states.contains(CompanionState.ARRIVAL))
+    }
+
+    @Test
+    fun oldOrInaccurateFixesAreIgnored() {
+        repeat(5) {
+            scheduler.advance(1_000)
+            sm.updateDrivingData(gpsFix(50f, ageMs = TripTracker.GPS_STALE_MS + 5_000))
+        }
+        assertFalse("cached location", sm.playContext().moving)
+        repeat(5) {
+            scheduler.advance(1_000)
+            sm.updateDrivingData(gpsFix(50f, accuracyM = 300f))
+        }
+        assertFalse("too inaccurate", sm.playContext().moving)
+        sm.updateDrivingData(gpsFix(50f))
+        assertTrue(sm.playContext().moving)
+    }
+
+    @Test
+    fun noSharpTurnReactionOnAStaleSpeed() {
+        sm.updateDrivingData(gpsFix(60f))
+        val last = gpsFix(60f)
+        sm.updateDrivingData(last)
+        scheduler.advance(TripTracker.GPS_STALE_MS + 1_000)
+        sm.updateDrivingData(sensorEvent(last, isTurning = true, turnDirection = TurnDirection.LEFT))
+        assertFalse(states.contains(CompanionState.TURN_LEFT))
+    }
+
+    // ---- showing the overlay again keeps the trip
+
+    @Test
+    fun overlayShownAgainKeepsTheTrip() {
+        sm.onCarEntered()
+        gps(60f, 8 * 60_000L)
+        // Hidden for a minute and shown again: what CompanionService.setInitialState() does.
+        sm.syncProfile(AppProfile.AUTO)
+        sm.resetInteraction()
+        sm.onOverlayShown()
+        assertEquals(TripPhase.DRIVING, sm.tripPhase())
+        gps(60f, 4 * 60_000L)
+        assertFalse(states.contains(CompanionState.TRIP_START))
+        gps(0f, TripTracker.ARRIVAL_STOP_MS + 2_000)
+        assertTrue("8 + 4 min of driving add up", states.contains(CompanionState.ARRIVAL))
+    }
+
+    @Test
+    fun overlayShownAgainStillReleasesStuckReactions() {
+        oneShotMs = null
+        sm.onLongPress()
+        sm.resetInteraction()
+        assertFalse(sm.isBusy())
+        assertEquals(CompanionState.CALM, state)
     }
 }

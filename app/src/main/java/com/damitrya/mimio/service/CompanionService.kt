@@ -439,7 +439,9 @@ class CompanionService : Service(),
         overlayManager.onTapListener = { stateMachine.onTap() }
         overlayManager.onLongPressListener = { stateMachine.onLongPress() }
         overlayManager.onLongPressReleasedListener = { stateMachine.onLongPressReleased() }
-        stateMachine.setProfile(profileManager.getCurrentProfile())
+        // Showing the overlay again is not a profile switch: the running trip is kept.
+        stateMachine.syncProfile(profileManager.getCurrentProfile())
+        stateMachine.resetInteraction()
         stateMachine.onOverlayShown()
     }
 

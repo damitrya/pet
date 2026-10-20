@@ -179,10 +179,10 @@ class SleepSequenceIntegrationTest {
     @Test
     fun sharpTurnDropsTheSequence() {
         sm.setProfile(AppProfile.AUTO)
-        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(0f))
         sleepCurledUp()
-        sm.updateDrivingData(DrivingData(speedKmh = 30f, hasGpsFix = true))
-        sm.updateDrivingData(DrivingData(speedKmh = 30f, isTurning = true, turnDirection = TurnDirection.LEFT, hasGpsFix = true))
+        sm.updateDrivingData(gpsFix(30f))
+        sm.updateDrivingData(gpsFix(30f, isTurning = true, turnDirection = TurnDirection.LEFT))
         assertTrue(state == CompanionState.TURN_LEFT || state == CompanionState.TRIP_START)
         scheduler.advance(10_000)
         assertFalse(played.drop(1).any { it.second == "wake_curled" })

@@ -118,6 +118,9 @@ class StateMachine(
     private var lastSpeedKmh: Float = 0f
     private var lastSpeedAt: Long = 0L
 
+    /** Number of the last location fix seen ([DrivingData.fixSeq]); sensor events repeat it. */
+    private var lastFixSeq: Long = 0L
+
     /** When the car came to a stop (0 = moving or unknown). */
     private var stoppedSince: Long = 0L
 
@@ -195,19 +198,15 @@ class StateMachine(
         this.profile = profile
     }
 
+    /**
+     * A real profile switch (getting into / out of the car): the trip and the departure tracking start
+     * over. Showing the overlay again is not a switch — see [resetInteraction].
+     */
     fun setProfile(profile: AppProfile) {
         this.profile = profile
         // Bluetooth / a manual switch is not movement: the trip is only getting ready.
         if (profile == AppProfile.AUTO) trip.onEnteredCar() else trip.onLeftCar()
         arrivalDueAt = 0L
-        // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
-        // will no longer match the current state, so clear their guards explicitly.
-        alertActive = false
-        petActive = false
-        tapQueued = false
-        recentTaps.clear()
-        recentPets.clear()
-        lastActivityAt = clock()
         lastSpeedKmh = 0f
         lastSpeedAt = 0L
         stoppedSince = 0L
@@ -216,6 +215,22 @@ class StateMachine(
         departedAt = 0L
         wasTurning = false
         wasMoving = false
+        resetInteraction()
+    }
+
+    /**
+     * Starts the character over (profile switch, overlay shown again) without touching the car:
+     * the trip, its driving time and the GPS state are kept.
+     */
+    fun resetInteraction() {
+        // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
+        // will no longer match the current state, so clear their guards explicitly.
+        alertActive = false
+        petActive = false
+        tapQueued = false
+        recentTaps.clear()
+        recentPets.clear()
+        lastActivityAt = clock()
         // A call or music outlives a profile switch: go straight back to it.
         transitionTo(ambientState())
     }
@@ -411,11 +426,18 @@ class StateMachine(
     fun updateDrivingData(data: DrivingData) {
         if (!data.hasGpsFix) return
         val now = clock()
-        lastSpeedKmh = data.speedKmh
-        lastSpeedAt = now
+        // Braking / turn events repeat the last fix: they must not make an old speed look fresh.
+        val newFix = data.fixSeq > lastFixSeq
+        if (newFix) lastFixSeq = data.fixSeq
+        val usable = newFix && TripTracker.isUsableFix(data.fixAgeMs, data.accuracyM)
+        if (usable) {
+            lastSpeedKmh = data.speedKmh
+            lastSpeedAt = now - data.fixAgeMs
+        }
 
         if (data.isTurning && !wasTurning) onSharpTurn(data.turnDirection)
         wasTurning = data.isTurning
+        if (!usable) return
 
         val moving = isConfirmedMoving()
         if (moving && !wasMoving) onStartedMoving()
@@ -424,7 +446,7 @@ class StateMachine(
         val firstFix = awaitingFirstFix
         awaitingFirstFix = false
 
-        if (profile == AppProfile.AUTO && trip.onGps(data.speedKmh) == TripEvent.ARRIVED) arrivalDueAt = now
+        if (profile == AppProfile.AUTO && trip.onGps(data.speedKmh, lastSpeedAt) == TripEvent.ARRIVED) arrivalDueAt = now
         playArrival()
 
         if (data.speedKmh < STOPPED_KMH) {
@@ -456,7 +478,7 @@ class StateMachine(
         if (currentState !in TURN_INTERRUPTIBLE) return
         val now = clock()
         if (now - turnAt < TURN_COOLDOWN_MS) return
-        if (lastSpeedKmh < TURN_MIN_KMH) return
+        if (lastSpeedKmh < TURN_MIN_KMH || now - lastSpeedAt > GPS_STALE_MS) return
         turnAt = now
         lastActivityAt = now
         rememberBaseState()

@@ -157,4 +157,21 @@ class TripTrackerTest {
         clock.advance(TripTracker.GPS_STALE_MS + 1)
         assertFalse(trip.standingFor(60_000))
     }
+    @Test
+    fun fixTimeIsTheTimeOfTheFix() {
+        trip.onEnteredCar()
+        drive(50f, 12 * 60_000L)
+        drive(0f, 100_000)
+        clock.advance(30_000)
+        // Delivered now, but taken 25 s ago: the standstill it confirms is 105 s, not 130 s.
+        assertEquals(TripEvent.NONE, trip.onGps(0f, clock.now - 25_000))
+    }
+
+    @Test
+    fun usableFixes() {
+        assertTrue(TripTracker.isUsableFix(0, 0f))
+        assertTrue(TripTracker.isUsableFix(2_000, 20f))
+        assertFalse(TripTracker.isUsableFix(TripTracker.GPS_STALE_MS + 1, 5f))
+        assertFalse(TripTracker.isUsableFix(500, TripTracker.MAX_ACCURACY_M + 1))
+    }
 }
