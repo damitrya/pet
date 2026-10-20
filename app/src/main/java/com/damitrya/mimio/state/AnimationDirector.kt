@@ -98,22 +98,29 @@ class AnimationDirector(
     }
 
     /**
-     * True while a non-basic CALM variant (yawn, a scene…) is playing; capped at [MAX_SCENE_MS]
-     * so a lost end callback (overlay hidden) can never block the state machine.
+     * True while a non-basic CALM variant (yawn, a scene…) or a MUSIC show (guitar, microphone) is playing;
+     * capped at [MAX_SCENE_MS] so a lost end callback (overlay hidden) can never block the state machine.
      */
     fun isSceneRunning(): Boolean {
         val v = current ?: return false
-        if (currentState != CompanionState.CALM || AnimTag.BASE in v.tags) return false
-        return clock() - currentStartedAt < MAX_SCENE_MS
+        val busy = when (currentState) {
+            CompanionState.CALM -> AnimTag.BASE !in v.tags
+            CompanionState.MUSIC -> AnimTag.SCENE in v.tags
+            else -> false
+        }
+        return busy && clock() - currentStartedAt < MAX_SCENE_MS
     }
 
     /**
-     * True while a scene or an active animation (butterfly, tail chasing, shaking…) plays in CALM or
-     * FIDGET: something that should stop at once when the car starts moving.
+     * True while a scene or an active animation (butterfly, tail chasing, turning its back, the guitar,
+     * the side dance…) plays in CALM, FIDGET or MUSIC: something that should stop at once when the car
+     * starts moving.
      */
     fun isDistractingSceneRunning(): Boolean {
         val v = current ?: return false
-        if (currentState != CompanionState.CALM && currentState != CompanionState.FIDGET) return false
+        if (currentState != CompanionState.CALM && currentState != CompanionState.FIDGET &&
+            currentState != CompanionState.MUSIC
+        ) return false
         if (AnimTag.SCENE !in v.tags && AnimTag.ACTIVE !in v.tags) return false
         return clock() - currentStartedAt < MAX_SCENE_MS
     }

@@ -45,6 +45,7 @@ import com.damitrya.mimio.overlay.OverlayManager
 import com.damitrya.mimio.state.AnimationDirector
 import com.damitrya.mimio.state.CharacterMood
 import com.damitrya.mimio.state.CompanionState
+import com.damitrya.mimio.state.FarewellFlow
 import com.damitrya.mimio.state.StateMachine
 import com.damitrya.mimio.state.WeatherModifier
 import com.damitrya.mimio.ui.SettingsActivity
@@ -103,6 +104,9 @@ class CompanionService : Service(),
     private lateinit var director: AnimationDirector
     private lateinit var overlayManager: OverlayManager
 
+    /** "Hide" waits for the heart farewell, "Show" during it keeps the fox (see [FarewellFlow]). */
+    private lateinit var farewell: FarewellFlow
+
     // Daily profile providers
     private lateinit var batteryProvider: BatteryDataProvider
     private lateinit var timeProvider: TimeDataProvider
@@ -157,6 +161,7 @@ class CompanionService : Service(),
         stateMachine.distractingScene = { director.isDistractingSceneRunning() }
         stateMachine.onSceneCut = { overlayManager.getCharacterView()?.cutScene() }
         overlayManager = OverlayManager(this, settings)
+        farewell = FarewellFlow(stateMachine, { overlayManager.isVisible() }, { hideOverlay() }, { showOverlay() })
 
         // Daily profile providers
         batteryProvider = BatteryDataProvider(this, settings)
@@ -195,30 +200,19 @@ class CompanionService : Service(),
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> {
-                mood.flush()
-                overlayManager.hide()
-                updateNotification(isVisible = false)
+                farewell.onHidePressed()
                 return START_STICKY
             }
             ACTION_SHOW -> {
-                overlayManager.show()
-                setInitialState()
-                updateNotification(isVisible = true)
+                farewell.onShowPressed()
                 return START_STICKY
             }
             ACTION_TOGGLE -> {
-                if (overlayManager.isVisible()) {
-                    mood.flush()
-                    overlayManager.hide()
-                    updateNotification(isVisible = false)
-                } else {
-                    overlayManager.show()
-                    setInitialState()
-                    updateNotification(isVisible = true)
-                }
+                if (overlayManager.isVisible()) farewell.onHidePressed() else farewell.onShowPressed()
                 return START_STICKY
             }
             ACTION_STOP -> {
+                // Stopping is immediate: no farewell holds the service (or its notification) back.
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -241,6 +235,7 @@ class CompanionService : Service(),
     override fun onDestroy() {
         settings.unregisterChangeListener(settingsListener)
         handler.removeCallbacks(profileRecheck)
+        farewell.release()                 // no hide / notification after the service is gone
         stateMachine.destroy()
         mood.flush()
         stopProviders()
@@ -435,6 +430,18 @@ class CompanionService : Service(),
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(modifier)
     }
 
+    private fun hideOverlay() {
+        mood.flush()
+        overlayManager.hide()
+        updateNotification(isVisible = false)
+    }
+
+    private fun showOverlay() {
+        overlayManager.show()
+        setInitialState()
+        updateNotification(isVisible = true)
+    }
+
     private fun setInitialState() {
         overlayManager.getCharacterView()?.let { cv ->
             cv.oneShotAnimationEndListener = { state -> stateMachine.onOneShotCompleted(state) }
@@ -445,6 +452,7 @@ class CompanionService : Service(),
         overlayManager.onTapListener = { stateMachine.onTap() }
         overlayManager.onLongPressListener = { stateMachine.onLongPress() }
         overlayManager.onLongPressReleasedListener = { stateMachine.onLongPressReleased() }
+        overlayManager.onLongPressCancelledListener = { stateMachine.onLongPressCancelled() }
         // Showing the overlay again is not a profile switch: the running trip is kept.
         stateMachine.syncProfile(profileManager.getCurrentProfile())
         stateMachine.resetInteraction()

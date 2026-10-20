@@ -52,6 +52,7 @@
     <!-- Behavior -->
     <string name="label_music_reaction">React to music</string>
     <string name="label_sensor_reaction">React to braking and turns</string>
+    <string name="label_haptics">Haptic feedback</string>
     <string name="label_auto_start">Auto-start on boot</string>
 
     <!-- Profile -->

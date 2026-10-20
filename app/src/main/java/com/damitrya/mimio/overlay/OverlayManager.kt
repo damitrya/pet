@@ -6,9 +6,9 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -45,6 +45,23 @@ class OverlayManager(
      */
     var onLongPressReleasedListener: (() -> Unit)? = null
 
+    /**
+     * Invoked when a long press does not end as petting: the finger started dragging the character, or
+     * the system cancelled the gesture. Ends PET without the HEARTS / SHY finale.
+     */
+    var onLongPressCancelledListener: (() -> Unit)? = null
+
+    /** Ticks for the user's touches (tap, long press, the heart); off in the settings → silent. */
+    private val haptics = TouchHaptics({ settings.hapticsEnabled }) { effect ->
+        overlayView?.performHapticFeedback(
+            when (effect) {
+                TouchHaptics.Effect.TAP -> HapticFeedbackConstants.KEYBOARD_TAP
+                TouchHaptics.Effect.HOLD -> HapticFeedbackConstants.LONG_PRESS
+                TouchHaptics.Effect.HEART -> HapticFeedbackConstants.CLOCK_TICK
+            }
+        ) ?: false
+    }
+
     fun getCharacterView(): CharacterView? = characterView
     fun getWeatherOverlayView(): WeatherOverlayView? = weatherOverlayView
 
@@ -72,6 +89,7 @@ class OverlayManager(
 
         overlayView = LayoutInflater.from(context).inflate(R.layout.overlay_character, null)
         characterView = overlayView?.findViewById(R.id.character_view)
+        characterView?.haptics = haptics
         weatherOverlayView = overlayView?.findViewById(R.id.weather_overlay_view)
 
         // Apply opacity
@@ -117,14 +135,30 @@ class OverlayManager(
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
-        var isDragging = false
-        var isLongPressActive = false
-        var downTime = 0L
+
+        val gesture = PressGesture(object : PressGesture.Listener {
+            override fun onTap() {
+                haptics.play(TouchHaptics.Effect.TAP)
+                onTapListener?.invoke()
+            }
+            override fun onPetStart() {
+                haptics.play(TouchHaptics.Effect.HOLD)
+                onLongPressListener?.invoke()
+            }
+            override fun onPetEnd() {
+                onLongPressReleasedListener?.invoke()
+            }
+            override fun onPetCancel() {
+                onLongPressCancelledListener?.invoke()
+            }
+        })
 
         val longPressHandler = Handler(Looper.getMainLooper())
-        val longPressRunnable = Runnable {
-            isLongPressActive = true
-            onLongPressListener?.invoke()
+        val longPressRunnable = Runnable { gesture.longPress() }
+
+        fun savePosition() {
+            settings.overlayX = layoutParams?.x ?: 0
+            settings.overlayY = layoutParams?.y ?: 0
         }
 
         overlayView?.setOnTouchListener { _, event ->
@@ -134,20 +168,16 @@ class OverlayManager(
                     initialY = layoutParams?.y ?: 0
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
-                    isDragging = false
-                    isLongPressActive = false
-                    downTime = SystemClock.uptimeMillis()
+                    gesture.down()
                     longPressHandler.postDelayed(longPressRunnable, LONG_PRESS_THRESHOLD_MS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - initialTouchX
                     val dy = event.rawY - initialTouchY
-                    if (!isDragging && (dx * dx + dy * dy > 25)) {
-                        isDragging = true
+                    // Moving the character is not petting: a petting that turns into a drag is cancelled.
+                    if (gesture.move(dx, dy)) {
                         longPressHandler.removeCallbacks(longPressRunnable)
-                    }
-                    if (isDragging) {
                         layoutParams?.x = initialX + dx.toInt()
                         layoutParams?.y = initialY + dy.toInt()
                         try {
@@ -158,34 +188,13 @@ class OverlayManager(
                 }
                 MotionEvent.ACTION_UP -> {
                     longPressHandler.removeCallbacks(longPressRunnable)
-                    // End PET first: the finger may have started dragging after the long press fired.
-                    val wasLongPress = isLongPressActive
-                    if (wasLongPress) {
-                        isLongPressActive = false
-                        onLongPressReleasedListener?.invoke()
-                    }
-                    if (isDragging) {
-                        // Save new position
-                        settings.overlayX = layoutParams?.x ?: 0
-                        settings.overlayY = layoutParams?.y ?: 0
-                    } else if (!wasLongPress) {
-                        // Short tap → trigger TAP animation
-                        onTapListener?.invoke()
-                    }
+                    if (gesture.up()) savePosition()
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    // Gesture interrupted by the system: never fire a tap, but always end PET.
+                    // Gesture interrupted by the system: never a tap, a petting ends without its finale.
                     longPressHandler.removeCallbacks(longPressRunnable)
-                    if (isDragging) {
-                        settings.overlayX = layoutParams?.x ?: 0
-                        settings.overlayY = layoutParams?.y ?: 0
-                    }
-                    if (isLongPressActive) {
-                        isLongPressActive = false
-                        onLongPressReleasedListener?.invoke()
-                    }
-                    isDragging = false
+                    if (gesture.cancel()) savePosition()
                     true
                 }
                 else -> false

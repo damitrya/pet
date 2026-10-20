@@ -68,6 +68,25 @@ class AnimationResourcesTest {
     }
 
     @Test
+    fun wave4AnimationsAreCompatibleAnimatedWebp() {
+        for (name in WAVE4) {
+            val info = readWebp(File(rawDir, "fox_$name.webp"))
+            assertEquals("$name width", 128, info.width)
+            assertEquals("$name height", 128, info.height)
+            assertTrue("$name is animated", info.animated)
+            assertTrue("$name has alpha", info.alpha)
+            assertTrue("$name frames ${info.frames}", info.frames >= 100)
+            assertEquals(0, info.loopCount)
+            assertEquals("$name: 25 fps", info.frames * 40L, info.durationMs)
+            assertTrue("$name: ${info.durationMs} ms", info.durationMs <= AnimationDirector.MAX_SCENE_MS)
+        }
+        val heart = readWebp(File(rawDir, "fox_${AnimationPools.HEART_TRANSFORM}.webp")).durationMs
+        assertTrue("about 4–5 s: $heart", heart in 4_000L..5_000L)
+        assertTrue("the farewell ends before its safety timeout", heart < StateMachine.FAREWELL_TIMEOUT_MS)
+        assertTrue("the heart moment is inside the animation", AnimationPools.HEART_MOMENT_MS in 1L until heart)
+    }
+
+    @Test
     fun previewOnlyAnimationsExist() {
         for (name in AnimationPools.PREVIEW_ONLY) assertTrue(name, "fox_$name" in files)
     }
@@ -82,7 +101,9 @@ class AnimationResourcesTest {
                 if (!f.exists()) continue
                 val ms = readWebp(f).durationMs
                 if (!state.isLooping) assertTrue("$state/${v.resName}: $ms ms", ms < StateMachine.ONE_SHOT_TIMEOUT_MS)
-                if (state == CompanionState.CALM && AnimTag.BASE !in v.tags) {
+                val scene = (state == CompanionState.CALM && AnimTag.BASE !in v.tags) ||
+                    (state == CompanionState.MUSIC && AnimTag.SCENE in v.tags)
+                if (scene) {
                     assertTrue("${v.resName}: $ms ms", ms <= AnimationDirector.MAX_SCENE_MS)
                 }
             }
@@ -125,6 +146,8 @@ class AnimationResourcesTest {
             "driving", "seatbelt", "navigator", "mechanic", "tire_check", "refuel", "car_wash",
             "arrival", "pothole", "parking"
         )
+
+        val WAVE4 = listOf("heart_transform", "dance_side", "microphone", "guitar", "tail_back")
 
         val WAVE3 = listOf(
             "tail_hide", "grooming", "butterfly", "curl_up", "sleep_curled", "wake_curled",

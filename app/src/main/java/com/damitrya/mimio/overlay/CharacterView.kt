@@ -59,6 +59,12 @@ class CharacterView @JvmOverloads constructor(
     /** Chooses the variants (mood, context, variety). Without it the plain [AnimationPools] are used. */
     var director: AnimationDirector? = null
 
+    /** Haptic ticks; the view gives one when the fox has become a heart. */
+    var haptics: TouchHaptics? = null
+
+    /** Tick at [AnimationPools.HEART_MOMENT_MS] of heart_transform; dropped if anything else starts. */
+    private val heartTick = Runnable { haptics?.play(TouchHaptics.Effect.HEART) }
+
     init {
         setBackgroundColor(0x00000000)
         addView(lottieView)
@@ -68,6 +74,7 @@ class CharacterView @JvmOverloads constructor(
     fun setState(state: CompanionState) {
         if (state == currentState) return
         currentState = state
+        removeCallbacks(heartTick)
         imageView.animate().cancel()      // a scene cut may be fading out
         imageView.alpha = 1f
 
@@ -115,6 +122,13 @@ class CharacterView @JvmOverloads constructor(
             // Nothing to play: a one-shot must still end, or the state machine would wait for it.
             if (!state.isLooping) post { if (currentState == state) oneShotAnimationEndListener?.invoke(state) }
             return
+        }
+
+        removeCallbacks(heartTick)
+        if (variant?.resName == AnimationPools.HEART_TRANSFORM &&
+            resId == resolveRawRes(settings.character, AnimationPools.HEART_TRANSFORM)   // not a fallback
+        ) {
+            postDelayed(heartTick, AnimationPools.HEART_MOMENT_MS)
         }
 
         val drawable = obtainDrawable(resId)
@@ -224,6 +238,7 @@ class CharacterView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         removeCallbacks(memoryLog)
+        removeCallbacks(heartTick)
         imageView.animate().cancel()
         super.onDetachedFromWindow()
     }
@@ -260,6 +275,7 @@ class CharacterView @JvmOverloads constructor(
     }
 
     fun pauseAnimation() {
+        removeCallbacks(heartTick)
         if (currentState?.rawVideoResName != null) {
             (imageView.drawable as? AnimatedImageDrawable)?.stop()
         } else {
