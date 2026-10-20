@@ -1,19 +1,19 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import android.os.Handler
 import android.os.Looper
-import com.drivecompanion.data.AppProfile
-import com.drivecompanion.data.AppUsageData
-import com.drivecompanion.data.BatteryData
-import com.drivecompanion.data.DrivingData
-import com.drivecompanion.data.MediaData
-import com.drivecompanion.data.PhoneCallData
-import com.drivecompanion.data.ScreenData
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.data.StepData
-import com.drivecompanion.data.TimeData
-import com.drivecompanion.data.TurnDirection
-import com.drivecompanion.data.WeatherData
+import com.damitrya.mimio.data.AppProfile
+import com.damitrya.mimio.data.AppUsageData
+import com.damitrya.mimio.data.BatteryData
+import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.MediaData
+import com.damitrya.mimio.data.PhoneCallData
+import com.damitrya.mimio.data.ScreenData
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.data.StepData
+import com.damitrya.mimio.data.TimeData
+import com.damitrya.mimio.data.TurnDirection
+import com.damitrya.mimio.data.WeatherData
 import kotlin.random.Random
 
 /**
@@ -22,13 +22,17 @@ import kotlin.random.Random
  * to MUSIC, and falls asleep after a long period without interaction.
  *
  * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
- * RELIEF / TRIP_START > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) > GREETING, STRETCH >
+ * RELIEF / TRIP_START / ARRIVAL > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) >
+ * GREETING, TRIP_PREPARE, STRETCH >
  * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, FIDGET, DROWSY, LOW_BATTERY)
  * only start from an ambient state; BLINK and dozing off also wait for an idle scene ([idleBusy]).
  * Which file each state plays is up to [AnimationDirector]; it never changes the state.
  *
  * Every one-shot is ended by force after [ONE_SHOT_TIMEOUT_MS] if its end is never reported.
  * User and car events also feed the [CharacterMood].
+ *
+ * The car trip (PARKED → PREPARING → DRIVING → ARRIVED) is followed by [TripTracker]: getting into the
+ * car plays TRIP_PREPARE, the end of a long trip ARRIVAL; both end at once when the car starts moving.
  */
 class StateMachine(
     private val settings: SettingsRepository,
@@ -132,6 +136,15 @@ class StateMachine(
     /** Last tap or long press by the user (for friendlier reactions shortly afterwards). */
     private var lastInteractionAt: Long = 0L
 
+    /** Active profile: car animations only play in AUTO. */
+    private var profile: AppProfile = AppProfile.DAILY
+
+    /** The car trip, from the profile switch and the GPS (see [TripTracker]). */
+    private val trip = TripTracker(clock)
+
+    /** When an ARRIVAL blocked by ALERT/PET became due; retried until [ARRIVAL_RETRY_MS] (0 = none). */
+    private var arrivalDueAt: Long = 0L
+
     /**
      * True while the character plays a self-started idle scene (see [AnimationDirector.isSceneRunning]).
      * Blinking and dozing off wait for it; user and car reactions do not.
@@ -165,10 +178,28 @@ class StateMachine(
     fun playContext(): PlayContext = PlayContext(
         moving = isConfirmedMoving() || isShortStop(),
         music = musicPlaying,
-        sinceInteractionMs = if (lastInteractionAt == 0L) Long.MAX_VALUE else clock() - lastInteractionAt
+        sinceInteractionMs = if (lastInteractionAt == 0L) Long.MAX_VALUE else clock() - lastInteractionAt,
+        car = profile == AppProfile.AUTO,
+        parked = profile == AppProfile.AUTO && trip.standingFor(SHORT_STOP_MS),
+        trip = trip.phase
     )
 
+    /** Phase of the car trip. */
+    fun tripPhase(): TripPhase = trip.phase
+
+    /**
+     * Records the profile restored at start-up without a switch (no reset, no TRIP_PREPARE):
+     * the service may restart in the middle of a drive.
+     */
+    fun syncProfile(profile: AppProfile) {
+        this.profile = profile
+    }
+
     fun setProfile(profile: AppProfile) {
+        this.profile = profile
+        // Bluetooth / a manual switch is not movement: the trip is only getting ready.
+        if (profile == AppProfile.AUTO) trip.onEnteredCar() else trip.onLeftCar()
+        arrivalDueAt = 0L
         // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
         // will no longer match the current state, so clear their guards explicitly.
         alertActive = false
@@ -196,6 +227,30 @@ class StateMachine(
         mood?.onEvent(MoodEvent.GREETING)
         rememberBaseState()
         transitionTo(CompanionState.GREETING)
+    }
+
+    /**
+     * Getting into the car (switch to AUTO with the overlay shown): TRIP_PREPARE instead of GREETING —
+     * the fox buckles up or checks the map. Nothing starts moving because of it.
+     */
+    fun onCarEntered() {
+        if (alertActive || petActive) return
+        lastActivityAt = clock()
+        mood?.onEvent(MoodEvent.GREETING)
+        rememberBaseState()
+        transitionTo(CompanionState.TRIP_PREPARE)
+    }
+
+    /**
+     * The car's Bluetooth disconnected (engine off). With a long trip behind and the GPS showing the
+     * car standing, the trip is over: ARRIVAL. A disconnect on its own changes nothing.
+     */
+    fun onCarDisconnected() {
+        if (profile != AppProfile.AUTO) return
+        if (trip.onEngineOff() == TripEvent.ARRIVED) {
+            arrivalDueAt = clock()
+            playArrival()
+        }
     }
 
     /**
@@ -369,6 +424,9 @@ class StateMachine(
         val firstFix = awaitingFirstFix
         awaitingFirstFix = false
 
+        if (profile == AppProfile.AUTO && trip.onGps(data.speedKmh) == TripEvent.ARRIVED) arrivalDueAt = now
+        playArrival()
+
         if (data.speedKmh < STOPPED_KMH) {
             if (stoppedSince == 0L) stoppedSince = now
             if (firstFix || now - stoppedSince >= PARKED_MS) {
@@ -413,12 +471,33 @@ class StateMachine(
      * for a calm one. Reactions and other states are left alone.
      */
     private fun onStartedMoving() {
-        if (!distractingScene()) return
         when (currentState) {
-            CompanionState.FIDGET -> returnToBaseState()
-            CompanionState.CALM -> onSceneCut()
+            // Car scenes for a standing car: buckling up, the flag, parking are over once it moves.
+            CompanionState.TRIP_PREPARE, CompanionState.ARRIVAL -> returnToBaseState()
+            CompanionState.FIDGET -> if (distractingScene()) returnToBaseState()
+            CompanionState.CALM -> if (distractingScene()) onSceneCut()
             else -> {}
         }
+    }
+
+    /**
+     * Plays a due ARRIVAL. Blocked by ALERT/PET it waits (retried on the next GPS updates) for up to
+     * [ARRIVAL_RETRY_MS]; if the car moves again first, it is dropped.
+     */
+    private fun playArrival() {
+        val due = arrivalDueAt
+        if (due == 0L) return
+        if (clock() - due > ARRIVAL_RETRY_MS || isConfirmedMoving()) {
+            arrivalDueAt = 0L
+            return
+        }
+        if (alertActive || petActive) return
+        arrivalDueAt = 0L
+        lastActivityAt = clock()
+        mood?.onEvent(MoodEvent.ARRIVAL)
+        tapQueued = false
+        rememberBaseState()
+        transitionTo(CompanionState.ARRIVAL)
     }
 
     /** Plays TRIP_START; returns false if a higher-priority state (ALERT, PET) blocked it. */
@@ -644,7 +723,7 @@ class StateMachine(
         }
         val now = clock()
         val idleFor = now - lastActivityAt
-        val moving = isConfirmedMoving()
+        val moving = isConfirmedMoving() || isShortStop()     // not at a traffic light either
         if (idleFor >= SLEEP_AFTER_MS && !moving) {
             transitionTo(CompanionState.FALL_ASLEEP)
         } else if (idleFor >= DROWSY_AFTER_MS && drowsyAt < lastActivityAt && !moving) {
@@ -676,8 +755,14 @@ class StateMachine(
         /** A one-shot that has not finished after this long is ended by force (no stuck states). */
         const val ONE_SHOT_TIMEOUT_MS = 15_000L
 
-        /** A stop shorter than this still counts as driving for the choice of animations (no scenes). */
+        /**
+         * A stop shorter than this still counts as driving for the choice of animations (no scenes);
+         * a longer one with fresh GPS is a confirmed standstill (car scenes for a parked car).
+         */
         private const val SHORT_STOP_MS = 60_000L
+
+        /** How long after the trip ended an ARRIVAL blocked by ALERT/PET may still be played. */
+        private const val ARRIVAL_RETRY_MS = 30_000L
 
         /** While an idle scene plays, the blink timer checks again after this delay. */
         private const val SCENE_RETRY_MS = 1000L
@@ -707,7 +792,8 @@ class StateMachine(
         private val TURN_INTERRUPTIBLE = setOf(
             CompanionState.CALM, CompanionState.MUSIC, CompanionState.PHONE_CALL, CompanionState.SLEEP,
             CompanionState.BLINK, CompanionState.FIDGET, CompanionState.DROWSY, CompanionState.LOW_BATTERY,
-            CompanionState.STRETCH, CompanionState.GREETING, CompanionState.FALL_ASLEEP
+            CompanionState.STRETCH, CompanionState.GREETING, CompanionState.FALL_ASLEEP,
+            CompanionState.TRIP_PREPARE
         )
 
         /** Minimum speed and pause between sharp-turn reactions. */

@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -6,7 +6,7 @@ import android.content.SharedPreferences
 class SettingsRepository(private val prefs: SharedPreferences) {
 
     constructor(context: Context) :
-        this(context.getSharedPreferences("drivecompanion_prefs", Context.MODE_PRIVATE))
+        this(context.getSharedPreferences("mimio_prefs", Context.MODE_PRIVATE))
 
     companion object {
         // Overlay
@@ -55,6 +55,12 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         const val CHARACTER_SLIME = "slime"
         const val CHARACTER_FOX = "fox"
 
+        /**
+         * The slime is hidden for now: the settings do not offer it and the fox is always shown.
+         * Its files and fallbacks stay in the app; set to false to bring it back.
+         */
+        const val SLIME_HIDDEN = true
+
         /** [bluetoothDeviceAddress] value meaning "any car audio / hands-free device". */
         const val BLUETOOTH_ANY_CAR = "any_car"
 
@@ -87,9 +93,12 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         get() = prefs.getInt(KEY_OVERLAY_OPACITY, DEFAULT_OPACITY)
         set(value) = prefs.edit().putInt(KEY_OVERLAY_OPACITY, value).apply()
 
-    /** [CHARACTER_SLIME] (original, unprefixed files) or [CHARACTER_FOX] (fox_*.webp). */
+    /**
+     * [CHARACTER_SLIME] (original, unprefixed files) or [CHARACTER_FOX] (fox_*.webp).
+     * While [SLIME_HIDDEN], always the fox (a saved slime choice is ignored, not erased).
+     */
     var character: String
-        get() = prefs.getString(KEY_CHARACTER, CHARACTER_SLIME) ?: CHARACTER_SLIME
+        get() = if (SLIME_HIDDEN) CHARACTER_FOX else prefs.getString(KEY_CHARACTER, CHARACTER_SLIME) ?: CHARACTER_SLIME
         set(value) = prefs.edit().putString(KEY_CHARACTER, value).apply()
 
     // Speed thresholds

@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 /**
  * Interface defining state evaluation logic for a profile.

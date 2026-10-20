@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import kotlin.math.abs
 import kotlin.math.sqrt

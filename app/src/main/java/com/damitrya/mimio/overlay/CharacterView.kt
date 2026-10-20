@@ -1,4 +1,4 @@
-package com.drivecompanion.overlay
+package com.damitrya.mimio.overlay
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
@@ -14,11 +14,11 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.state.AnimationDirector
-import com.drivecompanion.state.AnimationPools
-import com.drivecompanion.state.AnimationVariant
-import com.drivecompanion.state.CompanionState
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.state.AnimationDirector
+import com.damitrya.mimio.state.AnimationPools
+import com.damitrya.mimio.state.AnimationVariant
+import com.damitrya.mimio.state.CompanionState
 
 /**
  * Custom view that displays the animated companion character using Lottie
@@ -202,7 +202,7 @@ class CharacterView @JvmOverloads constructor(
 
     /**
      * Debug builds only: every [MEMORY_LOG_MS] logs the decoded-animation cache and the process heaps
-     * (`adb logcat -s DriveCompanionMem`), to watch memory over a long session.
+     * (`adb logcat -s MimioMem`), to watch memory over a long session.
      */
     private val memoryLog = object : Runnable {
         override fun run() {
@@ -279,6 +279,6 @@ class CharacterView @JvmOverloads constructor(
         private const val MAX_CACHED_DRAWABLES = 12
         private const val CUT_FADE_MS = 120L
         private const val MEMORY_LOG_MS = 60_000L
-        private const val MEMORY_TAG = "DriveCompanionMem"
+        private const val MEMORY_TAG = "MimioMem"
     }
 }

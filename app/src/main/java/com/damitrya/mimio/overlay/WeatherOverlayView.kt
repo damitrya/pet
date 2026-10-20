@@ -1,11 +1,11 @@
-package com.drivecompanion.overlay
+package com.damitrya.mimio.overlay
 
 import android.content.Context
 import android.util.AttributeSet
 import android.widget.FrameLayout
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
-import com.drivecompanion.state.WeatherModifier
+import com.damitrya.mimio.state.WeatherModifier
 
 class WeatherOverlayView @JvmOverloads constructor(
     context: Context,

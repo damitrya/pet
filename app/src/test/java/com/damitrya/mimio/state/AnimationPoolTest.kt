@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import kotlin.random.Random
 
@@ -18,7 +18,18 @@ enum class AnimTag {
     /** Listening, looking around, puzzling: likelier with high curiosity. */
     EXPLORE,
     /** Waving, teasing, wagging: likelier with high affection and right after an interaction. */
-    FRIENDLY
+    FRIENDLY,
+
+    /** Car companion: only in the AUTO profile. */
+    CAR,
+    /** Holding the steering wheel: only while the car moves; the one extra not toned down when driving. */
+    DRIVING,
+    /** Only at a confirmed standstill (fresh GPS, longer than a traffic light). */
+    PARKED_ONLY,
+    /** Also while getting ready for a trip (and likelier then), even before the standstill is confirmed. */
+    PREPARING,
+    /** Caring for the car (wrench, tyre, fuel, wash): such scenes are spaced further apart from each other. */
+    MAINTENANCE
 }
 
 /**
@@ -109,6 +120,15 @@ object AnimationPools {
 
     private const val MINUTE = 60_000L
 
+    /**
+     * Animations with no automatic trigger yet: they exist for the gallery and manual preview only
+     * (pothole — a reliable bump detector is still missing). Kept out of every pool on purpose.
+     */
+    val PREVIEW_ONLY = setOf("pothole")
+
+    private val CAR_SCENE = setOf(AnimTag.CAR, AnimTag.SCENE, AnimTag.PARKED_ONLY)
+    private val CAR_CARE = CAR_SCENE + AnimTag.MAINTENANCE
+
     private val SLEEP_CURLED = mapOf(
         CompanionState.SLEEP to "sleep_curled",
         CompanionState.WAKE to "wake_curled"
@@ -140,7 +160,19 @@ object AnimationPools {
                 AnimationVariant("sneeze", weight = 3, cooldown = 8, minGapMs = 2 * MINUTE),
                 AnimationVariant("listen", weight = 6, cooldown = 4, tags = setOf(AnimTag.EXPLORE)),
                 AnimationVariant("confused", weight = 3, cooldown = 6, minGapMs = MINUTE,
-                    tags = setOf(AnimTag.EXPLORE))
+                    tags = setOf(AnimTag.EXPLORE)),
+                // Car companion (AUTO profile). Driving: short and calm, never a scene.
+                AnimationVariant("driving", weight = 6, cooldown = 3, minGapMs = 45_000L,
+                    tags = setOf(AnimTag.CAR, AnimTag.DRIVING)),
+                // Standing still only; the slime has no files for them — they are skipped.
+                AnimationVariant("navigator", weight = 3, cooldown = 8, minGapMs = 3 * MINUTE,
+                    tags = CAR_SCENE + AnimTag.PREPARING + AnimTag.EXPLORE),
+                AnimationVariant("parking", weight = 2, cooldown = 8, minGapMs = 5 * MINUTE, tags = CAR_SCENE),
+                AnimationVariant("tire_check", weight = 3, cooldown = 8, minGapMs = 5 * MINUTE,
+                    tags = CAR_CARE + AnimTag.EXPLORE),
+                AnimationVariant("refuel", weight = 3, cooldown = 8, minGapMs = 5 * MINUTE, tags = CAR_CARE),
+                AnimationVariant("mechanic", weight = 2, cooldown = 10, minGapMs = 8 * MINUTE, tags = CAR_CARE),
+                AnimationVariant("car_wash", weight = 2, cooldown = 10, minGapMs = 8 * MINUTE, tags = CAR_CARE)
             ),
             CompanionState.BLINK to single("blink"),
             CompanionState.MUSIC to pool(
@@ -171,6 +203,15 @@ object AnimationPools {
             CompanionState.RELIEF to single("relief", fallback = "blink"),
             CompanionState.GREETING to single("greeting", fallback = "tap"),
             CompanionState.TRIP_START to single("trip_start", fallback = "tap"),
+            // Car companion: getting into the car and the end of a long trip.
+            CompanionState.TRIP_PREPARE to pool(
+                AnimationVariant("seatbelt", weight = 70, fallback = "tap"),
+                AnimationVariant("navigator", weight = 30, tags = setOf(AnimTag.EXPLORE))
+            ),
+            CompanionState.ARRIVAL to pool(
+                AnimationVariant("arrival", weight = 65, fallback = "tap"),
+                AnimationVariant("parking", weight = 35)
+            ),
             CompanionState.FALL_ASLEEP to pool(
                 AnimationVariant("fall_asleep", weight = 60, fallback = "blink"),
                 // Lies down with the tail over its nose; SLEEP and WAKE then keep the curled pose.

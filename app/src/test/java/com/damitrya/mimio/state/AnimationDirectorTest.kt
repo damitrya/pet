@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -251,6 +251,116 @@ class AnimationDirectorTest {
             return (1..200).map { c.advance(2500); d.pick(CompanionState.CALM, FOX)!!.resName }
         }
         assertEquals(run(), run())
+    }
+
+    // ---- car companion
+
+    private val car = setOf("driving", "navigator", "parking", "tire_check", "refuel", "mechanic", "car_wash")
+    private val parkedScenes = car - "driving"
+
+    private fun calmPicks(d: AnimationDirector, minutes: Int = 120): List<AnimationVariant> =
+        (1..minutes * 60 / 3).map { clock.advance(3_000); d.pick(CompanionState.CALM, FOX)!! }
+
+    @Test
+    fun noCarAnimationsOutsideTheCar() {
+        ctx = PlayContext(car = false, parked = true)
+        val names = calmPicks(director(moodOf(curiosity = 95f))).map { it.resName }.toSet()
+        assertTrue("$names", names.intersect(car).isEmpty())
+        ctx = PlayContext(car = false, moving = true)
+        assertFalse(calmPicks(director()).any { it.resName == "driving" })
+    }
+
+    @Test
+    fun whileDrivingOnlyTheCalmDrivingLoop() {
+        ctx = PlayContext(car = true, moving = true, trip = TripPhase.DRIVING)
+        val picks = calmPicks(director(moodOf(energy = 95f, curiosity = 95f)))
+        val names = picks.map { it.resName }
+        assertTrue("driving plays now and then", "driving" in names)
+        assertTrue(names.toSet().intersect(parkedScenes).isEmpty())
+        assertFalse(picks.any { AnimTag.SCENE in it.tags || AnimTag.ACTIVE in it.tags })
+        val share = names.count { it == "driving" }.toDouble() / names.size
+        assertTrue("a rare variant: $share", share in 0.005..0.15)
+    }
+
+    @Test
+    fun drivingLoopNeedsMovement() {
+        ctx = PlayContext(car = true, parked = true)
+        assertFalse(calmPicks(director()).any { it.resName == "driving" })
+        ctx = PlayContext(car = true)                       // standing, but not confirmed (no GPS)
+        assertFalse(calmPicks(director()).any { it.resName == "driving" })
+    }
+
+    @Test
+    fun carScenesOnlyAtAConfirmedStandstill() {
+        ctx = PlayContext(car = true, parked = false, trip = TripPhase.DRIVING)
+        assertTrue(calmPicks(director()).none { it.resName in parkedScenes })
+        ctx = PlayContext(car = true, parked = true, trip = TripPhase.ARRIVED)
+        val names = calmPicks(director(moodOf(curiosity = 80f)), minutes = 240).map { it.resName }.toSet()
+        assertTrue("$names", names.containsAll(parkedScenes))
+    }
+
+    @Test
+    fun navigatorAlsoWhileGettingReady() {
+        ctx = PlayContext(car = true, trip = TripPhase.PREPARING)
+        val names = calmPicks(director(), minutes = 30).map { it.resName }
+        assertTrue("navigator" in names)
+        assertTrue(names.toSet().intersect(parkedScenes - "navigator").isEmpty())
+        ctx = PlayContext(car = true, moving = true, trip = TripPhase.PREPARING)
+        assertFalse(calmPicks(director(), minutes = 30).any { it.resName == "navigator" })
+    }
+
+    @Test
+    fun carCareScenesAreSpacedApart() {
+        ctx = PlayContext(car = true, parked = true, trip = TripPhase.PARKED)
+        val d = director(moodOf(curiosity = 90f), seed = 5)
+        val times = mutableListOf<Long>()
+        repeat(4 * 3600 / 3) {
+            clock.advance(3_000)
+            val v = d.pick(CompanionState.CALM, FOX)!!
+            if (AnimTag.MAINTENANCE in v.tags) times += clock.now
+        }
+        assertTrue("seen ${times.size}", times.size >= 4)
+        times.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.MAINTENANCE_GAP_MS) }
+    }
+
+    @Test
+    fun longCarScenesAreCutWhenDrivingStarts() {
+        val d = director()
+        for (name in parkedScenes) {
+            clock.advance(10 * 60_000L)
+            d.pick(CompanionState.CALM) { it.resName == name }
+            assertTrue(name, d.isDistractingSceneRunning())
+            assertTrue(name, d.isSceneRunning())
+        }
+        d.pick(CompanionState.CALM) { it.resName == "driving" }
+        assertFalse("the driving loop is calm", d.isDistractingSceneRunning())
+    }
+
+    @Test
+    fun gettingReadyAndArrivingPickTheirScenes() {
+        val d = director()
+        val prep = (1..200).map { d.pick(CompanionState.TRIP_PREPARE, FOX)!!.resName }.toSet()
+        assertEquals(setOf("seatbelt", "navigator"), prep)
+        val arrive = (1..200).map { d.pick(CompanionState.ARRIVAL, FOX)!!.resName }.toSet()
+        assertEquals(setOf("arrival", "parking"), arrive)
+    }
+
+    @Test
+    fun slimeGetsPlaceholdersForCarStates() {
+        ctx = PlayContext(car = true, parked = true, trip = TripPhase.PREPARING)
+        val d = director()
+        repeat(100) {
+            assertEquals("tap", d.pick(CompanionState.TRIP_PREPARE, SLIME)!!.fallback)
+            assertEquals("tap", d.pick(CompanionState.ARRIVAL, SLIME)!!.fallback)
+            clock.advance(3_000)
+            assertTrue(d.pick(CompanionState.CALM, SLIME)!!.resName in SLIME_FILES)
+        }
+    }
+
+    @Test
+    fun potholeIsPreviewOnly() {
+        val all = AnimationPools.create().values.flatMap { p -> p.variants.flatMap { listOf(it.resName) + it.next.values } }
+        for (name in AnimationPools.PREVIEW_ONLY) assertFalse(name, name in all)
     }
 
     private fun pickUntil(d: AnimationDirector, state: CompanionState, name: String): AnimationVariant {

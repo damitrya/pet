@@ -1,4 +1,4 @@
-package com.drivecompanion.service
+package com.damitrya.mimio.service
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -14,39 +14,39 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
-import com.drivecompanion.R
-import com.drivecompanion.data.AppProfile
-import com.drivecompanion.data.AppUsageData
-import com.drivecompanion.data.AppUsageProvider
-import com.drivecompanion.data.BatteryData
-import com.drivecompanion.data.BatteryDataProvider
-import com.drivecompanion.data.AccelerometerMonitor
-import com.drivecompanion.data.BluetoothTrigger
-import com.drivecompanion.data.DrivingData
-import com.drivecompanion.data.MediaData
-import com.drivecompanion.data.MediaStateProvider
-import com.drivecompanion.data.PhoneCallData
-import com.drivecompanion.data.PhoneCallProvider
-import com.drivecompanion.data.PrefsMoodStore
-import com.drivecompanion.data.ProfileManager
-import com.drivecompanion.data.ProfileSelector
-import com.drivecompanion.data.ScreenData
-import com.drivecompanion.data.ScreenStateProvider
-import com.drivecompanion.data.SensorDataProvider
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.data.StepData
-import com.drivecompanion.data.StepDataProvider
-import com.drivecompanion.data.TimeData
-import com.drivecompanion.data.TimeDataProvider
-import com.drivecompanion.data.WeatherData
-import com.drivecompanion.data.WeatherDataProvider
-import com.drivecompanion.overlay.OverlayManager
-import com.drivecompanion.state.AnimationDirector
-import com.drivecompanion.state.CharacterMood
-import com.drivecompanion.state.CompanionState
-import com.drivecompanion.state.StateMachine
-import com.drivecompanion.state.WeatherModifier
-import com.drivecompanion.ui.SettingsActivity
+import com.damitrya.mimio.R
+import com.damitrya.mimio.data.AppProfile
+import com.damitrya.mimio.data.AppUsageData
+import com.damitrya.mimio.data.AppUsageProvider
+import com.damitrya.mimio.data.BatteryData
+import com.damitrya.mimio.data.BatteryDataProvider
+import com.damitrya.mimio.data.AccelerometerMonitor
+import com.damitrya.mimio.data.BluetoothTrigger
+import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.MediaData
+import com.damitrya.mimio.data.MediaStateProvider
+import com.damitrya.mimio.data.PhoneCallData
+import com.damitrya.mimio.data.PhoneCallProvider
+import com.damitrya.mimio.data.PrefsMoodStore
+import com.damitrya.mimio.data.ProfileManager
+import com.damitrya.mimio.data.ProfileSelector
+import com.damitrya.mimio.data.ScreenData
+import com.damitrya.mimio.data.ScreenStateProvider
+import com.damitrya.mimio.data.SensorDataProvider
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.data.StepData
+import com.damitrya.mimio.data.StepDataProvider
+import com.damitrya.mimio.data.TimeData
+import com.damitrya.mimio.data.TimeDataProvider
+import com.damitrya.mimio.data.WeatherData
+import com.damitrya.mimio.data.WeatherDataProvider
+import com.damitrya.mimio.overlay.OverlayManager
+import com.damitrya.mimio.state.AnimationDirector
+import com.damitrya.mimio.state.CharacterMood
+import com.damitrya.mimio.state.CompanionState
+import com.damitrya.mimio.state.StateMachine
+import com.damitrya.mimio.state.WeatherModifier
+import com.damitrya.mimio.ui.SettingsActivity
 
 class CompanionService : Service(),
     AccelerometerMonitor.Listener,
@@ -64,13 +64,13 @@ class CompanionService : Service(),
     BluetoothTrigger.Listener {
 
     companion object {
-        const val CHANNEL_ID = "drivecompanion_channel"
+        const val CHANNEL_ID = "mimio_channel"
         const val NOTIFICATION_ID = 1001
-        const val ACTION_SHOW = "com.drivecompanion.ACTION_SHOW"
-        const val ACTION_HIDE = "com.drivecompanion.ACTION_HIDE"
-        const val ACTION_TOGGLE = "com.drivecompanion.ACTION_TOGGLE"
-        const val ACTION_STOP = "com.drivecompanion.ACTION_STOP"
-        const val ACTION_SWITCH_PROFILE = "com.drivecompanion.ACTION_SWITCH_PROFILE"
+        const val ACTION_SHOW = "com.damitrya.mimio.ACTION_SHOW"
+        const val ACTION_HIDE = "com.damitrya.mimio.ACTION_HIDE"
+        const val ACTION_TOGGLE = "com.damitrya.mimio.ACTION_TOGGLE"
+        const val ACTION_STOP = "com.damitrya.mimio.ACTION_STOP"
+        const val ACTION_SWITCH_PROFILE = "com.damitrya.mimio.ACTION_SWITCH_PROFILE"
 
         /** Retry interval while ALERT/PET postpones a profile switch. */
         private const val BUSY_RETRY_MS = 2000L
@@ -181,6 +181,7 @@ class CompanionService : Service(),
 
         createNotificationChannel()
         profileManager.restoreProfile()
+        stateMachine.syncProfile(profileManager.getCurrentProfile())
         settings.registerChangeListener(settingsListener)
         // In "auto_bluetooth" the saved profile may be stale (the last drive): start from DAILY,
         // BluetoothTrigger switches to AUTO if the car is already connected.
@@ -375,8 +376,8 @@ class CompanionService : Service(),
         // Reset overlay state (the character itself follows the state machine)
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(WeatherModifier.NONE)
 
-        // Getting into the car: say hello (TRIP_START follows on the first departure)
-        if (newProfile == AppProfile.AUTO && overlayManager.isVisible()) stateMachine.onOverlayShown()
+        // Getting into the car: buckle up / check the map (TRIP_START follows on the first departure)
+        if (newProfile == AppProfile.AUTO && overlayManager.isVisible()) stateMachine.onCarEntered()
         if (providersStarted) updateNotification(overlayManager.isVisible())
     }
 
@@ -413,6 +414,8 @@ class CompanionService : Service(),
 
     // BluetoothTrigger.Listener
     override fun onCarBluetoothChanged(connected: Boolean) {
+        // Engine off after a long trip with the GPS showing a standstill: the fox celebrates arriving.
+        if (!connected) stateMachine.onCarDisconnected()
         profileSelector.onCarBluetooth(connected)
         applyProfileSetting()
     }

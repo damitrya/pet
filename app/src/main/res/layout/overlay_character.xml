@@ -4,12 +4,12 @@
     android:layout_height="wrap_content"
     android:background="@android:color/transparent">
 
-    <com.drivecompanion.overlay.CharacterView
+    <com.damitrya.mimio.overlay.CharacterView
         android:id="@+id/character_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <com.drivecompanion.overlay.WeatherOverlayView
+    <com.damitrya.mimio.overlay.WeatherOverlayView
         android:id="@+id/weather_overlay_view"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />

@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import kotlin.math.exp
 import kotlin.math.min
@@ -20,7 +20,7 @@ interface MoodStore {
 }
 
 /** Things that happen to the character and nudge its mood. */
-enum class MoodEvent { TAP, PET, GREETING, TRIP_START, MUSIC_START }
+enum class MoodEvent { TAP, PET, GREETING, TRIP_START, MUSIC_START, ARRIVAL }
 
 /**
  * The character's mood: energy, affection and curiosity (0–100). Values change gradually:
@@ -96,6 +96,7 @@ class CharacterMood(
             MoodEvent.GREETING -> affection = gain(affection, 1f)
             MoodEvent.TRIP_START -> { curiosity = gain(curiosity, 8f); energy = gain(energy, 5f) }
             MoodEvent.MUSIC_START -> energy = gain(energy, 4f)
+            MoodEvent.ARRIVAL -> { affection = gain(affection, 3f); energy = gain(energy, 2f) }
         }
         saveIfDue(updatedAt)
     }

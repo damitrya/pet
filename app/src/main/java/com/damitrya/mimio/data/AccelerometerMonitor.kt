@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import android.content.Context
 import android.hardware.Sensor
@@ -12,7 +12,7 @@ import android.os.SystemClock
 /**
  * Feeds linear acceleration, gravity and GPS speed into [BrakeDetector] and reports sharp braking.
  * Works for any phone mount; see [BrakeDetector] for how the car's forward axis is learned.
- * Cooldown and playback-guard logic is handled by [com.drivecompanion.state.StateMachine].
+ * Cooldown and playback-guard logic is handled by [com.damitrya.mimio.state.StateMachine].
  */
 class AccelerometerMonitor(context: Context) : SensorEventListener {
 

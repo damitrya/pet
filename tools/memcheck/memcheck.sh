@@ -4,12 +4,12 @@
 #   tools/memcheck/memcheck.sh [minutes=60] [interval_s=30] [out=memcheck.csv]
 #
 # Every interval it records `dumpsys meminfo` of the app (Java heap, native heap, graphics,
-# total PSS) into a CSV, and keeps the app's own log line (debug builds, tag DriveCompanionMem:
+# total PSS) into a CSV, and keeps the app's own log line (debug builds, tag MimioMem:
 # decoded-animation cache size, cache misses, heaps). Run it with a debug build, the fox selected
 # and the overlay shown; tap / pet the fox now and then, or play music, to switch animations often.
 # A healthy run levels off after the first minutes: no steady growth of Native Heap or TOTAL PSS.
 set -euo pipefail
-PKG=com.drivecompanion
+PKG=com.damitrya.mimio
 MINUTES=${1:-60}
 INTERVAL=${2:-30}
 OUT=${3:-memcheck.csv}
@@ -17,7 +17,7 @@ LOG=${OUT%.csv}.log
 
 adb shell pidof "$PKG" >/dev/null || { echo "$PKG is not running"; exit 1; }
 adb logcat -c
-adb logcat -s DriveCompanionMem:D > "$LOG" &
+adb logcat -s MimioMem:D > "$LOG" &
 LOGCAT=$!
 trap 'kill $LOGCAT 2>/dev/null || true' EXIT
 

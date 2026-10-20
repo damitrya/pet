@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager

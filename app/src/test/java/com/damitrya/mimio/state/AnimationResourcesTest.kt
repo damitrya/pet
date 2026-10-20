@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -54,6 +54,25 @@ class AnimationResourcesTest {
     }
 
     @Test
+    fun carAnimationsAreCompatibleAnimatedWebp() {
+        for (name in CAR) {
+            val info = readWebp(File(rawDir, "fox_$name.webp"))
+            assertEquals("$name width", 128, info.width)
+            assertEquals("$name height", 128, info.height)
+            assertTrue("$name is animated", info.animated)
+            assertTrue("$name has alpha", info.alpha)
+            assertTrue("$name frames ${info.frames}", info.frames >= 40)
+            assertEquals(0, info.loopCount)
+            assertTrue("$name: ${info.durationMs} ms", info.durationMs <= AnimationDirector.MAX_SCENE_MS)
+        }
+    }
+
+    @Test
+    fun previewOnlyAnimationsExist() {
+        for (name in AnimationPools.PREVIEW_ONLY) assertTrue(name, "fox_$name" in files)
+    }
+
+    @Test
     fun animationsEndInTime() {
         // One-shots must end well before the state machine's watchdog, idle scenes before
         // the director stops treating them as running.
@@ -102,6 +121,11 @@ class AnimationResourcesTest {
     }
 
     companion object {
+        val CAR = listOf(
+            "driving", "seatbelt", "navigator", "mechanic", "tire_check", "refuel", "car_wash",
+            "arrival", "pothole", "parking"
+        )
+
         val WAVE3 = listOf(
             "tail_hide", "grooming", "butterfly", "curl_up", "sleep_curled", "wake_curled",
             "tease", "sneeze", "listen", "paw_wave", "confused", "proud"

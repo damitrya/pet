@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 /**
  * All possible states of the companion character.
@@ -45,6 +45,18 @@ enum class CompanionState(
 
     /** One-shot joy when the car starts moving after a standstill (Auto profile). */
     TRIP_START("", false, "trip_start"),
+
+    /**
+     * One-shot when the companion gets into the car (switch to the AUTO profile): buckles up or checks
+     * the map. Replaces GREETING there. Ends at once when the car starts moving.
+     */
+    TRIP_PREPARE("", false, "seatbelt"),
+
+    /**
+     * One-shot at the end of a long trip (confirmed stop, see [TripTracker]): waves a chequered flag or
+     * parks. Ends at once if the car moves again.
+     */
+    ARRIVAL("", false, "arrival"),
 
     /** One-shot transition into SLEEP after a long period without interaction. */
     FALL_ASLEEP("", false, "fall_asleep"),

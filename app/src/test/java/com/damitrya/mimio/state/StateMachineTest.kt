@@ -1,13 +1,13 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
-import com.drivecompanion.data.AppProfile
-import com.drivecompanion.data.BatteryData
-import com.drivecompanion.data.DrivingData
-import com.drivecompanion.data.MediaData
-import com.drivecompanion.data.PhoneCallData
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.data.TimeData
-import com.drivecompanion.data.TurnDirection
+import com.damitrya.mimio.data.AppProfile
+import com.damitrya.mimio.data.BatteryData
+import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.MediaData
+import com.damitrya.mimio.data.PhoneCallData
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.data.TimeData
+import com.damitrya.mimio.data.TurnDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -258,5 +258,159 @@ class StateMachineTest {
         sm.onLongPressReleased()
         assertTrue(mood.snapshot().affection > before)
         assertTrue(sm.playContext().sinceInteractionMs < 1000)
+    }
+    // ---- car trip: TRIP_PREPARE, ARRIVAL, play context
+
+    /** GPS fixes once a second at [kmh] for [ms] (blink/fidget timers run meanwhile). */
+    private fun gps(kmh: Float, ms: Long) {
+        var t = 0L
+        while (t < ms) {
+            scheduler.advance(1_000)
+            t += 1_000
+            sm.updateDrivingData(DrivingData(speedKmh = kmh, hasGpsFix = true))
+        }
+    }
+
+    @Test
+    fun gettingIntoTheCarBucklesUpAndReturnsToCalm() {
+        sm.onCarEntered()
+        assertEquals(CompanionState.TRIP_PREPARE, state)
+        assertEquals(TripPhase.PREPARING, sm.tripPhase())
+        scheduler.advance(2_500)
+        assertEquals(CompanionState.CALM, state)
+        assertFalse("Bluetooth alone is not driving", sm.playContext().moving)
+    }
+
+    @Test
+    fun gettingIntoTheCarWaitsForAlertAndPet() {
+        sm.onLongPress()
+        sm.onCarEntered()
+        assertEquals(CompanionState.PET, state)
+        sm.onLongPressReleased()
+        sm.onAlertTriggered()
+        sm.onCarEntered()
+        assertEquals(CompanionState.ALERT, state)
+    }
+
+    @Test
+    fun preparingEndsAtOnceWhenTheCarMoves() {
+        oneShotMs = null
+        sm.onCarEntered()
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(DrivingData(speedKmh = 8f, hasGpsFix = true))
+        assertEquals(CompanionState.CALM, state)
+    }
+
+    @Test
+    fun longTripEndsWithArrival() {
+        sm.onCarEntered()
+        gps(0f, 5_000)
+        gps(60f, 12 * 60_000L)
+        assertEquals(TripPhase.DRIVING, sm.tripPhase())
+        assertFalse(states.contains(CompanionState.ARRIVAL))
+        gps(0f, TripTracker.ARRIVAL_STOP_MS + 2_000)
+        assertTrue(states.contains(CompanionState.ARRIVAL))
+        assertEquals(TripPhase.ARRIVED, sm.tripPhase())
+        assertEquals(1, states.count { it == CompanionState.ARRIVAL })
+        gps(0f, 5 * 60_000L)
+        assertEquals("celebrated once", 1, states.count { it == CompanionState.ARRIVAL })
+    }
+
+    @Test
+    fun trafficLightsAreNotArrivals() {
+        sm.onCarEntered()
+        gps(60f, 15 * 60_000L)
+        repeat(4) {
+            gps(0f, 90_000)
+            gps(40f, 60_000)
+        }
+        assertFalse(states.contains(CompanionState.ARRIVAL))
+        assertEquals(TripPhase.DRIVING, sm.tripPhase())
+    }
+
+    @Test
+    fun shortTripHasNoArrival() {
+        sm.onCarEntered()
+        gps(50f, 4 * 60_000L)
+        gps(0f, 5 * 60_000L)
+        assertFalse(states.contains(CompanionState.ARRIVAL))
+        assertEquals(TripPhase.PARKED, sm.tripPhase())
+    }
+
+    @Test
+    fun engineOffAfterALongTripIsAnArrival() {
+        sm.onCarEntered()
+        gps(60f, 12 * 60_000L)
+        gps(0f, 20_000)
+        sm.onCarDisconnected()
+        assertEquals(CompanionState.ARRIVAL, state)
+    }
+
+    @Test
+    fun engineOffWhileRollingOrWithoutGpsIsNothing() {
+        sm.onCarEntered()
+        sm.onCarDisconnected()
+        assertFalse("no GPS: no trip events", states.contains(CompanionState.ARRIVAL))
+        gps(60f, 12 * 60_000L)
+        sm.onCarDisconnected()
+        assertFalse(states.contains(CompanionState.ARRIVAL))
+    }
+
+    @Test
+    fun arrivalWaitsForPetThenPlays() {
+        sm.onCarEntered()
+        gps(60f, 12 * 60_000L)
+        gps(0f, TripTracker.ARRIVAL_STOP_MS - 3_000)
+        sm.onLongPress()
+        gps(0f, 6_000)                                   // the trip ends while the fox is petted
+        assertEquals(CompanionState.PET, state)
+        sm.onLongPressReleased()
+        gps(0f, 1_000)
+        assertTrue(states.contains(CompanionState.ARRIVAL))
+    }
+
+    @Test
+    fun arrivalEndsWhenTheCarMovesAgain() {
+        oneShotMs = null
+        sm.onCarEntered()
+        gps(60f, 12 * 60_000L)
+        gps(0f, TripTracker.ARRIVAL_STOP_MS + 1_000)
+        assertEquals(CompanionState.ARRIVAL, state)
+        sm.updateDrivingData(DrivingData(speedKmh = 6f, hasGpsFix = true))
+        assertEquals(CompanionState.CALM, state)
+    }
+
+    @Test
+    fun noCarEventsInTheDailyProfile() {
+        sm.setProfile(AppProfile.DAILY)
+        gps(60f, 12 * 60_000L)
+        gps(0f, 5 * 60_000L)
+        sm.onCarDisconnected()
+        assertFalse(states.contains(CompanionState.ARRIVAL))
+        assertFalse(sm.playContext().car)
+        assertFalse(sm.playContext().parked)
+    }
+
+    @Test
+    fun parkedOnlyAfterAConfirmedStandstill() {
+        assertTrue(sm.playContext().car)
+        assertFalse("no GPS yet: unknown, not parked", sm.playContext().parked)
+        gps(40f, 60_000)
+        gps(0f, 30_000)
+        assertFalse("traffic light", sm.playContext().parked)
+        gps(0f, 40_000)
+        assertTrue(sm.playContext().parked)
+        scheduler.advance(TripTracker.GPS_STALE_MS + 1)
+        assertFalse("GPS lost: not confirmed any more", sm.playContext().parked)
+    }
+
+    @Test
+    fun syncProfileOnlyRecordsTheProfile() {
+        sm.setProfile(AppProfile.DAILY)
+        states.clear()
+        sm.syncProfile(AppProfile.AUTO)
+        assertTrue(states.isEmpty())
+        assertTrue(sm.playContext().car)
+        assertEquals(TripPhase.PARKED, sm.tripPhase())
     }
 }

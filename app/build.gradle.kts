@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.drivecompanion"
+    namespace = "com.damitrya.mimio"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.drivecompanion"
+        applicationId = "com.damitrya.mimio"
         minSdk = 26
         targetSdk = 34
         versionCode = 2

@@ -1,10 +1,10 @@
-package com.drivecompanion.receiver
+package com.damitrya.mimio.receiver
 
 import android.content.Intent
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.service.CompanionService
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.service.CompanionService
 
 class CompanionTileService : TileService() {
 
@@ -31,7 +31,7 @@ class CompanionTileService : TileService() {
         val settings = SettingsRepository(this)
         qsTile?.apply {
             state = if (settings.serviceEnabled) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            label = "DriveCompanion"
+            label = "Mimio"
             updateTile()
         }
     }

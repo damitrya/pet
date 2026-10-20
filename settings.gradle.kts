@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DriveCompanion"
+rootProject.name = "Mimio"
 include(":app")

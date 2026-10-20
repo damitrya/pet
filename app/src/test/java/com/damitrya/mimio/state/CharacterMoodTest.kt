@@ -1,6 +1,6 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
-import com.drivecompanion.data.PrefsMoodStore
+import com.damitrya.mimio.data.PrefsMoodStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

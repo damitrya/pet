@@ -67,6 +67,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/btn_grant_permissions"
+                    android:textColor="@color/button_text_on_dark"
+                    app:strokeColor="@color/button_outline"
                     style="@style/Widget.Material3.Button.OutlinedButton" />
 
             </LinearLayout>
@@ -158,6 +160,8 @@
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btn_bluetooth_device"
                         style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:textColor="@color/button_text_on_dark"
+                        app:strokeColor="@color/button_outline"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:text="@string/bluetooth_not_selected" />
@@ -198,6 +202,7 @@
 
                 <!-- Character -->
                 <TextView
+                    android:id="@+id/label_character"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/label_character"

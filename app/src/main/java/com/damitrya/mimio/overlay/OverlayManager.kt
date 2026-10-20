@@ -1,4 +1,4 @@
-package com.drivecompanion.overlay
+package com.damitrya.mimio.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -13,8 +13,8 @@ import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import com.drivecompanion.R
-import com.drivecompanion.data.SettingsRepository
+import com.damitrya.mimio.R
+import com.damitrya.mimio.data.SettingsRepository
 
 class OverlayManager(
     private val context: Context,

@@ -1,13 +1,13 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.drivecompanion.state.MoodSnapshot
-import com.drivecompanion.state.MoodStore
-import com.drivecompanion.state.StoredMood
+import com.damitrya.mimio.state.MoodSnapshot
+import com.damitrya.mimio.state.MoodStore
+import com.damitrya.mimio.state.StoredMood
 
 /**
- * Keeps [com.drivecompanion.state.CharacterMood] in its own preferences file, so mood saves
+ * Keeps [com.damitrya.mimio.state.CharacterMood] in its own preferences file, so mood saves
  * do not wake the settings change listener of the service.
  */
 class PrefsMoodStore(private val prefs: SharedPreferences) : MoodStore {
@@ -36,7 +36,7 @@ class PrefsMoodStore(private val prefs: SharedPreferences) : MoodStore {
     }
 
     companion object {
-        private const val FILE = "drivecompanion_mood"
+        private const val FILE = "mimio_mood"
         private const val KEY_ENERGY = "energy"
         private const val KEY_AFFECTION = "affection"
         private const val KEY_CURIOSITY = "curiosity"

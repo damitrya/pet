@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 import android.Manifest
 import android.content.Context
@@ -8,7 +8,7 @@ import android.location.LocationManager
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
-import com.drivecompanion.state.WeatherModifier
+import com.damitrya.mimio.state.WeatherModifier
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader

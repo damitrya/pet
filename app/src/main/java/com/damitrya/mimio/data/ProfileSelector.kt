@@ -1,4 +1,4 @@
-package com.drivecompanion.data
+package com.damitrya.mimio.data
 
 /**
  * Decides which profile should be active, from the mode chosen in settings, the car's Bluetooth

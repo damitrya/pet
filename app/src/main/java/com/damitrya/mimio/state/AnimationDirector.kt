@@ -1,4 +1,4 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
 import kotlin.random.Random
 
@@ -8,7 +8,13 @@ data class PlayContext(
     val moving: Boolean = false,
     val music: Boolean = false,
     /** Time since the user last tapped or petted the character. */
-    val sinceInteractionMs: Long = Long.MAX_VALUE
+    val sinceInteractionMs: Long = Long.MAX_VALUE,
+    /** AUTO profile: car animations may play. */
+    val car: Boolean = false,
+    /** Confirmed standstill: fresh GPS shows the car standing longer than a traffic light. */
+    val parked: Boolean = false,
+    /** Phase of the car trip (see [TripTracker]). */
+    val trip: TripPhase = TripPhase.PARKED
 )
 
 /**
@@ -18,6 +24,9 @@ data class PlayContext(
  *   high affection [AnimTag.FRIENDLY], and active play needs energy;
  * - **context**: while the car moves, [AnimTag.SCENE] and [AnimTag.ACTIVE] variants are not played and
  *   other extras are toned down; right after an interaction friendly variants are likelier;
+ * - **car**: [AnimTag.CAR] variants only play in the AUTO profile, [AnimTag.DRIVING] only while the car
+ *   moves, [AnimTag.PARKED_ONLY] only at a confirmed standstill (or while getting ready, for
+ *   [AnimTag.PREPARING] ones), and [AnimTag.MAINTENANCE] scenes are at least [MAINTENANCE_GAP_MS] apart;
  * - **variety**: variants played recently lose weight, [AnimationVariant.minGapMs] spaces rare ones out,
  *   and self-started scenes are at least [SCENE_GAP_MS] apart;
  * - **calm first**: in pools with [AnimTag.BASE] variants those keep at least [MIN_BASE_SHARE] of the chance;
@@ -44,6 +53,7 @@ class AnimationDirector(
 
     private val lastPlayedAt = HashMap<String, Long>()
     private var lastSceneAt: Long = Long.MIN_VALUE / 2
+    private var lastMaintenanceAt: Long = Long.MIN_VALUE / 2
 
     /** Follow-ups of the variant on screen; they take effect when it reaches its last frame. */
     private var armedNext: Map<CompanionState, String> = emptyMap()
@@ -143,6 +153,9 @@ class AnimationDirector(
     private fun dynamicWeight(v: AnimationVariant, m: MoodSnapshot, ctx: PlayContext, now: Long): Double {
         var w = v.weight.toDouble()
         if (AnimTag.BASE in v.tags) return w
+        if (!carAllows(v, ctx)) return 0.0
+        if (AnimTag.MAINTENANCE in v.tags && now - lastMaintenanceAt < MAINTENANCE_GAP_MS) return 0.0
+        if (AnimTag.PREPARING in v.tags && ctx.trip == TripPhase.PREPARING) w *= PREPARING_FACTOR
         val e = m.energy / 100.0
         val a = m.affection / 100.0
         val c = m.curiosity / 100.0
@@ -156,7 +169,7 @@ class AnimationDirector(
 
         if (ctx.moving) {
             if (AnimTag.SCENE in v.tags || AnimTag.ACTIVE in v.tags) return 0.0
-            w *= MOVING_EXTRA_FACTOR
+            if (AnimTag.DRIVING !in v.tags) w *= MOVING_EXTRA_FACTOR
         }
         if (AnimTag.SCENE in v.tags && now - lastSceneAt < SCENE_GAP_MS) return 0.0
         if (v.minGapMs > 0) {
@@ -168,11 +181,23 @@ class AnimationDirector(
         return w
     }
 
+    /** Car-only conditions of a variant: profile, driving, standing still. */
+    private fun carAllows(v: AnimationVariant, ctx: PlayContext): Boolean {
+        if (AnimTag.CAR in v.tags && !ctx.car) return false
+        if (AnimTag.DRIVING in v.tags && !ctx.moving) return false
+        if (AnimTag.PARKED_ONLY in v.tags) {
+            val preparing = AnimTag.PREPARING in v.tags && ctx.trip == TripPhase.PREPARING && !ctx.moving
+            if (!ctx.parked && !preparing) return false
+        }
+        return true
+    }
+
     private fun played(state: CompanionState, v: AnimationVariant, now: Long): AnimationVariant {
         history.addLast(v.resName)
         while (history.size > HISTORY_SIZE) history.removeFirst()
         lastPlayedAt[v.resName] = now
         if (AnimTag.SCENE in v.tags) lastSceneAt = now
+        if (AnimTag.MAINTENANCE in v.tags) lastMaintenanceAt = now
         current = v
         currentState = state
         currentStartedAt = now
@@ -200,5 +225,11 @@ class AnimationDirector(
         const val MOVING_EXTRA_FACTOR = 0.6
 
         const val RECENT_INTERACTION_MS = 90_000L
+
+        /** Car-care scenes (wrench, tyre, fuel, wash) are at least this far apart from each other. */
+        const val MAINTENANCE_GAP_MS = 4 * 60_000L
+
+        /** [AnimTag.PREPARING] variants while getting ready for a trip. */
+        const val PREPARING_FACTOR = 3.0
     }
 }

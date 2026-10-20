@@ -1,4 +1,4 @@
-package com.drivecompanion.ui
+package com.damitrya.mimio.ui
 
 import android.Manifest
 import android.bluetooth.BluetoothManager
@@ -15,10 +15,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.drivecompanion.R
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.databinding.ActivitySettingsBinding
-import com.drivecompanion.service.CompanionService
+import com.damitrya.mimio.R
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.databinding.ActivitySettingsBinding
+import com.damitrya.mimio.service.CompanionService
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -84,7 +84,12 @@ class SettingsActivity : AppCompatActivity() {
             updateServiceButton()
         }
 
-        // Character choice — CharacterView picks it up on its next animation
+        // Character choice — CharacterView picks it up on its next animation.
+        // Hidden while the slime is: the fox is the only character for now.
+        if (SettingsRepository.SLIME_HIDDEN) {
+            binding.labelCharacter.visibility = View.GONE
+            binding.radioCharacter.visibility = View.GONE
+        }
         binding.radioCharacter.check(
             if (settings.character == SettingsRepository.CHARACTER_FOX) R.id.radio_character_fox
             else R.id.radio_character_slime

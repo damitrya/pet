@@ -1,11 +1,11 @@
-package com.drivecompanion.state
+package com.damitrya.mimio.state
 
-import com.drivecompanion.data.AppProfile
-import com.drivecompanion.data.DrivingData
-import com.drivecompanion.data.MediaData
-import com.drivecompanion.data.PhoneCallData
-import com.drivecompanion.data.SettingsRepository
-import com.drivecompanion.data.TurnDirection
+import com.damitrya.mimio.data.AppProfile
+import com.damitrya.mimio.data.DrivingData
+import com.damitrya.mimio.data.MediaData
+import com.damitrya.mimio.data.PhoneCallData
+import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.data.TurnDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
