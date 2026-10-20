@@ -56,3 +56,17 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
 }
+
+// RuStore rejects APKs that request privileged permissions. Check the merged release manifest:
+// it also carries the permissions of the libraries.
+tasks.matching { it.name == "processReleaseMainManifest" }.configureEach {
+    doLast {
+        val forbidden = listOf("android.permission.MEDIA_CONTENT_CONTROL")
+        outputs.files.asFileTree.matching { include("**/AndroidManifest.xml") }.forEach { manifest ->
+            val text = manifest.readText()
+            forbidden.filter { text.contains("\"$it\"") }.forEach {
+                throw GradleException("$it must not be in the release manifest (${manifest.path})")
+            }
+        }
+    }
+}
