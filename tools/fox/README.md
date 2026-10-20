@@ -301,6 +301,7 @@ fallback-логика слайма остались. `CharacterView`
 | `microphone`, `guitar` | MUSIC, вес 4, `SCENE`: не в движении, не чаще раза в 4 мин каждая и 45 с между любыми сценками; обычные танцы остаются > 75 % времени. Пока идёт номер, перерыв FIDGET ждёт его конца; машина тронулась — номер сменяется обычным танцем |
 | `tail_back` | CALM, вес 3, `SCENE`: не в движении (в том числе на коротком светофоре), не чаще раза в 5 мин; тронулись во время сценки — она прерывается |
 | слайм | новых файлов нет: варианты пропускаются, FAREWELL у слайма играет `pet` |
+| поглаживание → перетаскивание | если после распознанного удержания палец начал двигать персонажа, PET отменяется сразу и без финала HEARTS / SHY и не идёт в серию для SHY (`PressGesture`, `onLongPressCancelled`); так же при отмене жеста системой |
 
 **Тактильная отдача** (`overlay/TouchHaptics`): лёгкий щелчок на касание (`KEYBOARD_TAP`), мягкий отклик
 при распознавании долгого нажатия (`LONG_PRESS`), очень короткий тик в момент, когда лисёнок стал
@@ -313,7 +314,7 @@ fallback-логика слайма остались. `CharacterView`
 
 `app/src/test/...`: `AnimationPoolTest`, `AnimationDirectorTest`, `CharacterMoodTest`,
 `StateMachineTest`, `SleepSequenceIntegrationTest`, `AnimationResourcesTest`, `TripTrackerTest`,
-`Wave4Test` (сердечко, прощание, музыкальные номера, `tail_back`), `overlay/TouchHapticsTest`
+`Wave4Test` (сердечко, прощание, музыкальные номера, `tail_back`), `FarewellFlowTest` (Скрыть / Показать / торможение / повторное Скрыть / уничтоженный оверлей / остановка сервиса), `overlay/TouchHapticsTest`, `overlay/PressGestureTest`
 (`./gradlew testDebugUnitTest`).
 
 ### Память — как проверить на устройстве

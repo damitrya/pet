@@ -109,6 +109,20 @@ class Wave4Test {
     }
 
     @Test
+    fun pettingTurnedIntoADragEndsWithoutAFinale() {
+        oneShotMs = null
+        sm.onLongPress()
+        played.clear()
+        sm.onLongPressCancelled()                 // the finger started moving the character
+        sm.onLongPressReleased()                  // ...and is lifted at the new place
+        assertEquals(CompanionState.CALM, state)
+        assertTrue(played.none { it.first == CompanionState.HEARTS || it.first == CompanionState.SHY })
+        // a cancelled petting does not count toward the shy series
+        repeat(2) { pet(); scheduler.advance(3_000) }
+        assertTrue(played.none { it.first == CompanionState.SHY })
+    }
+
+    @Test
     fun heartFromPettingIsAReactionNotABackgroundScene() {
         director.pick(CompanionState.HEARTS) { it.resName == AnimationPools.HEART_TRANSFORM }
         assertFalse(director.isSceneRunning())

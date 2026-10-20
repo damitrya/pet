@@ -370,6 +370,16 @@ class StateMachine(
     }
 
     /**
+     * The long press did not end as petting (the finger started dragging the character, or the system
+     * cancelled the gesture): PET stops without HEARTS / SHY and the petting does not count.
+     */
+    fun onLongPressCancelled() {
+        if (currentState != CompanionState.PET) return
+        petActive = false
+        returnToBaseState()
+    }
+
+    /**
      * Triggered by a short tap on the character overlay.
      *
      * - ALERT or PET is active → ignore (high-priority states block taps).
