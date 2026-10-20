@@ -163,12 +163,13 @@ class FoxGeneratorTest(unittest.TestCase):
             self.assertLess(diff(frame(name, n - 1), self.calm), SAME_POSE, f"{name} end")
 
     def test_wave4_moves_smoothly(self):
-        # No jumps of the head, paws, tail or props between neighbouring frames.
+        # No jumps between neighbouring frames: never a bigger step than the existing dances take on the
+        # beat (music / music_paws ≈ 19; music_spin reaches 30).
         for name in g.WAVE4:
             n = g.EMOTIONS[name][1]
             frames = [frame(name, i) for i in range(n)]
             worst = max(diff(a, b) for a, b in zip(frames, frames[1:]))
-            self.assertLess(worst, 9.0, name)
+            self.assertLess(worst, 19.0, name)
 
     def test_wave4_keeps_a_transparent_background(self):
         for name in g.WAVE4:
@@ -242,8 +243,14 @@ class FoxGeneratorTest(unittest.TestCase):
                     inv = np.linalg.inv(g._local(pr).m)
                     lx, ly, _ = inv @ np.array([hand["x"], hand["y"], 1.0])
                     self.assertTrue(-40 < lx < -14 and abs(ly) < 1.5, f"{name} {i}: {lx:.1f}, {ly:.1f}")
-                seen.append((round(pr["x"]), round(pr["y"])))
+                seen.append((round(pr["x"]), round(pr["y"]), round(pr.get("rot", 0))))
             self.assertGreater(len(set(seen)), 3, f"{name}: the prop moves")
+            # ...and never jumps from one frame to the next
+            for i in range(n - 1):
+                a, b = fn(i, n)["props"], fn(i + 1, n)["props"]
+                if a and b:
+                    self.assertLess(abs(a[0]["x"] - b[0]["x"]) + abs(a[0]["y"] - b[0]["y"]), 4.0, f"{name} {i}")
+                    self.assertLess(abs(a[0].get("rot", 0) - b[0].get("rot", 0)), 8.0, f"{name} {i}")
 
     def test_wave4_is_described_for_the_gallery(self):
         for name in g.WAVE4:

@@ -3239,8 +3239,8 @@ def microphone(i, n):
     secs = _secs(n)
     p = default_pose()
     breathe(p, t, 0.5)
-    hold = window(t, 0.03, 0.15, 0.82, 0.94, ease_in_out)
-    s = pop_in_out(t, 0.05, 0.12, 0.83, 0.9)
+    hold = window(t, 0.03, 0.15, 0.84, 0.97, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.12, 0.86, 0.93)
     sing = window(t, 0.2, 0.24, 0.76, 0.8)
     sway = math.sin(2 * math.pi * (t - 0.2) * secs / 1.6) * sing
     p["lean"] = 4 * sway
@@ -3251,7 +3251,7 @@ def microphone(i, n):
     mouth = _mouth_at(p, (66, 83))
     r = math.radians(rot)
     grip_sing = (mouth[0] + 4 - 16 * math.sin(r), mouth[1] + 5 + 16 * math.cos(r))
-    to_mouth = keys(t, [(0.12, 0.0), (0.22, 1.0), (0.78, 1.0), (0.86, 0.0)])
+    to_mouth = keys(t, [(0.12, 0.0), (0.22, 1.0), (0.76, 1.0), (0.88, 0.0)])
     grip = (lerp(92, grip_sing[0], to_mouth), lerp(100, grip_sing[1], to_mouth))
     hand = paw(1, grip, hold)
     if s > 0.01:
@@ -3302,8 +3302,9 @@ def guitar(i, n):
     play = window(t, 0.16, 0.2, 0.7, 0.74)
     final = window(t, 0.74, 0.77, 0.8, 0.85, ease_in_out)
     lift = keys(t, [(0.06, 0.0), (0.16, 1.0), (0.84, 1.0), (0.92, 0.0)])
-    g_ = dict(kind="guitar", x=GUITAR_AT[0], y=lerp(106, GUITAR_AT[1], lift) - 1.5 * final,
-              rot=GUITAR_ROT + 4 * final, scale=1.15 * s)
+    rock = math.sin(2 * math.pi * (t - 0.16) * secs / 1.6) * play      # the guitar rocks gently with the tune
+    g_ = dict(kind="guitar", x=GUITAR_AT[0] + 1.2 * rock, y=lerp(106, GUITAR_AT[1], lift) - 1.5 * final,
+              rot=GUITAR_ROT + 4 * final + 3 * rock, scale=1.15 * s)
     if s > 0.01:
         p["props"] = [g_]
     # fretting paw moves between chord positions along the neck
