@@ -138,6 +138,15 @@ class StateMachine(
      */
     var idleBusy: () -> Boolean = { false }
 
+    /** True while a scene or an active animation plays (see [AnimationDirector.isDistractingSceneRunning]). */
+    var distractingScene: () -> Boolean = { false }
+
+    /** Asks the view to replace the running CALM variant at once (the car started moving). */
+    var onSceneCut: () -> Unit = {}
+
+    /** Confirmed movement at the previous GPS update (a scene is cut on the rising edge). */
+    private var wasMoving: Boolean = false
+
     private val blinkRunnable = Runnable { triggerBlink() }
 
     /** One-shot that never reported its end (e.g. the overlay was hidden meanwhile). */
@@ -154,7 +163,7 @@ class StateMachine(
 
     /** Context for [AnimationDirector]: driving, music, recent interaction. */
     fun playContext(): PlayContext = PlayContext(
-        moving = isConfirmedMoving(),
+        moving = isConfirmedMoving() || isShortStop(),
         music = musicPlaying,
         sinceInteractionMs = if (lastInteractionAt == 0L) Long.MAX_VALUE else clock() - lastInteractionAt
     )
@@ -175,6 +184,7 @@ class StateMachine(
         awaitingFirstFix = true
         departedAt = 0L
         wasTurning = false
+        wasMoving = false
         // A call or music outlives a profile switch: go straight back to it.
         transitionTo(ambientState())
     }
@@ -201,9 +211,10 @@ class StateMachine(
                 transitionTo(CompanionState.RELIEF)
             }
             CompanionState.FALL_ASLEEP -> {
-                // Music or a call started while dozing off — go there instead of sleeping.
+                // Music or a call started while dozing off: wake up (from the pose it dozed off in),
+                // then WAKE returns to MUSIC / PHONE_CALL.
                 transitionTo(
-                    if (baseLoopingState != CompanionState.CALM) baseLoopingState
+                    if (baseLoopingState != CompanionState.CALM) CompanionState.WAKE
                     else CompanionState.SLEEP
                 )
             }
@@ -351,6 +362,10 @@ class StateMachine(
         if (data.isTurning && !wasTurning) onSharpTurn(data.turnDirection)
         wasTurning = data.isTurning
 
+        val moving = isConfirmedMoving()
+        if (moving && !wasMoving) onStartedMoving()
+        wasMoving = moving
+
         val firstFix = awaitingFirstFix
         awaitingFirstFix = false
 
@@ -392,6 +407,20 @@ class StateMachine(
         )
     }
 
+    /**
+     * The car started moving: a scene or active animation that began while standing (butterfly, tail
+     * chasing…) stops at once. A FIDGET break ends (back to MUSIC); in CALM the view swaps the variant
+     * for a calm one. Reactions and other states are left alone.
+     */
+    private fun onStartedMoving() {
+        if (!distractingScene()) return
+        when (currentState) {
+            CompanionState.FIDGET -> returnToBaseState()
+            CompanionState.CALM -> onSceneCut()
+            else -> {}
+        }
+    }
+
     /** Plays TRIP_START; returns false if a higher-priority state (ALERT, PET) blocked it. */
     private fun onTripStarted(): Boolean {
         if (alertActive || petActive) return false
@@ -409,6 +438,11 @@ class StateMachine(
      */
     private fun isConfirmedMoving(): Boolean =
         lastSpeedKmh >= STOPPED_KMH && clock() - lastSpeedAt <= GPS_STALE_MS
+
+    /** Standing for less than [SHORT_STOP_MS] (traffic light, jam): the car will move off again soon. */
+    private fun isShortStop(): Boolean =
+        stoppedSince != 0L && !parked && clock() - stoppedSince < SHORT_STOP_MS &&
+            clock() - lastSpeedAt <= GPS_STALE_MS
 
     fun updateMediaData(data: MediaData) {
         musicPlaying = data.isPlaying && settings.musicReactionEnabled
@@ -641,6 +675,9 @@ class StateMachine(
 
         /** A one-shot that has not finished after this long is ended by force (no stuck states). */
         const val ONE_SHOT_TIMEOUT_MS = 15_000L
+
+        /** A stop shorter than this still counts as driving for the choice of animations (no scenes). */
+        private const val SHORT_STOP_MS = 60_000L
 
         /** While an idle scene plays, the blink timer checks again after this delay. */
         private const val SCENE_RETRY_MS = 1000L

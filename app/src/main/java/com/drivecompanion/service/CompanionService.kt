@@ -150,6 +150,8 @@ class CompanionService : Service(),
         stateMachine = StateMachine(settings, mood = mood)
         director = AnimationDirector(mood, context = { stateMachine.playContext() })
         stateMachine.idleBusy = { director.isSceneRunning() }
+        stateMachine.distractingScene = { director.isDistractingSceneRunning() }
+        stateMachine.onSceneCut = { overlayManager.getCharacterView()?.cutScene() }
         overlayManager = OverlayManager(this, settings)
 
         // Daily profile providers

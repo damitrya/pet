@@ -184,6 +184,74 @@ class StateMachineTest {
     }
 
     @Test
+    fun startingToDriveCutsADistractingScene() {
+        var scene = true
+        var cuts = 0
+        sm.distractingScene = { scene }
+        sm.onSceneCut = { cuts++ }
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(DrivingData(speedKmh = 12f, hasGpsFix = true))
+        assertEquals(1, cuts)
+        sm.updateDrivingData(DrivingData(speedKmh = 30f, hasGpsFix = true))
+        assertEquals("only on the start of movement", 1, cuts)
+
+        scene = false
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateDrivingData(DrivingData(speedKmh = 20f, hasGpsFix = true))
+        assertEquals("nothing to cut", 1, cuts)
+    }
+
+    @Test
+    fun startingToDriveEndsADistractingFidget() {
+        oneShotMs = null
+        sm.distractingScene = { true }
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.updateMediaData(MediaData(isPlaying = true))
+        scheduler.advance(41_000)                       // FIDGET break during the music
+        assertEquals(CompanionState.FIDGET, state)
+        sm.updateDrivingData(DrivingData(speedKmh = 10f, hasGpsFix = true))   // below the trip-start speed
+        assertEquals(CompanionState.MUSIC, state)
+    }
+
+    @Test
+    fun startingToDriveLeavesReactionsAlone() {
+        oneShotMs = null
+        var cuts = 0
+        sm.distractingScene = { true }
+        sm.onSceneCut = { cuts++ }
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        sm.onTap()
+        sm.updateDrivingData(DrivingData(speedKmh = 10f, hasGpsFix = true))
+        assertEquals(CompanionState.TAP, state)
+        assertEquals(0, cuts)
+    }
+
+    @Test
+    fun shortStopStillCountsAsDriving() {
+        sm.updateDrivingData(DrivingData(speedKmh = 40f, hasGpsFix = true))
+        clock.advance(5_000)
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))   // traffic light
+        clock.advance(30_000)
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        assertTrue("no scenes at a traffic light", sm.playContext().moving)
+        clock.advance(31_000)
+        sm.updateDrivingData(DrivingData(speedKmh = 0f, hasGpsFix = true))
+        assertFalse("a longer stop allows scenes again", sm.playContext().moving)
+    }
+
+    @Test
+    fun musicWhileDozingOffWakesUpFirst() {
+        var steps = 0
+        while (state != CompanionState.FALL_ASLEEP) { scheduler.advance(250); check(++steps < 4000) }
+        sm.updateMediaData(MediaData(isPlaying = true))
+        assertEquals("dozing off is not cut short", CompanionState.FALL_ASLEEP, state)
+        scheduler.advance(2_100)
+        assertEquals(CompanionState.WAKE, state)
+        scheduler.advance(2_100)
+        assertEquals(CompanionState.MUSIC, state)
+    }
+
+    @Test
     fun interactionsFeedTheMood() {
         val before = mood.snapshot().affection
         sm.onLongPress()

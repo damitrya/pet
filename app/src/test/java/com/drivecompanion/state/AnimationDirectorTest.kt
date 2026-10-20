@@ -147,7 +147,7 @@ class AnimationDirectorTest {
     @Test
     fun curlUpLeadsToCurledSleepAndWake() {
         val d = director(moodOf(energy = 5f))
-        pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        curledUp(d)
         assertEquals("sleep_curled", d.pick(CompanionState.SLEEP, FOX)!!.resName)
         assertEquals("wake_curled", d.pick(CompanionState.WAKE, FOX)!!.resName)
         // The sequence is over: the next wake-up is the usual one.
@@ -157,7 +157,7 @@ class AnimationDirectorTest {
     @Test
     fun interruptedSequenceIsDropped() {
         val d = director(moodOf(energy = 5f))
-        pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        curledUp(d)
         d.pick(CompanionState.ALERT, FOX)          // braking while dozing off
         assertEquals("sleep", d.pick(CompanionState.SLEEP, FOX)!!.resName)
     }
@@ -165,7 +165,7 @@ class AnimationDirectorTest {
     @Test
     fun sequenceFallsBackWhenTheCharacterChanges() {
         val d = director(moodOf(energy = 5f))
-        pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        curledUp(d)
         // Switched to the slime in the settings meanwhile: it has no sleep_curled.
         assertEquals("sleep", d.pick(CompanionState.SLEEP, SLIME)!!.resName)
         assertEquals("wake", d.pick(CompanionState.WAKE, SLIME)!!.resName)
@@ -174,9 +174,42 @@ class AnimationDirectorTest {
     @Test
     fun resetForgetsTheSequence() {
         val d = director(moodOf(energy = 5f))
-        pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        curledUp(d)
         d.reset()
         assertEquals("sleep", d.pick(CompanionState.SLEEP, FOX)!!.resName)
+    }
+
+    @Test
+    fun curlUpCutShortDoesNotContinueTheSequence() {
+        val d = director(moodOf(energy = 5f))
+        pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        // Tapped while still lying down: the curled-up wake would start from a pose it never reached.
+        assertEquals("wake", d.pick(CompanionState.WAKE, FOX)!!.resName)
+        assertEquals("sleep", d.pick(CompanionState.SLEEP, FOX)!!.resName)
+    }
+
+    @Test
+    fun finishedEventOfAnotherVariantDoesNotArmTheSequence() {
+        val d = director(moodOf(energy = 5f))
+        val curl = pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up")
+        d.pick(CompanionState.ALERT, FOX)
+        d.onFinished(CompanionState.FALL_ASLEEP, curl)     // late callback of the interrupted animation
+        assertEquals("sleep", d.pick(CompanionState.SLEEP, FOX)!!.resName)
+    }
+
+    @Test
+    fun distractingSceneIsReportedForScenesAndActiveOnly() {
+        val d = director()
+        d.pick(CompanionState.CALM) { it.resName == "butterfly" }
+        assertTrue(d.isDistractingSceneRunning())
+        clock.advance(AnimationDirector.MAX_SCENE_MS)
+        assertFalse(d.isDistractingSceneRunning())
+        d.pick(CompanionState.CALM) { it.resName == "listen" }
+        assertFalse("listening is calm", d.isDistractingSceneRunning())
+        d.pick(CompanionState.FIDGET) { it.resName == "shake" }
+        assertTrue(d.isDistractingSceneRunning())
+        d.pick(CompanionState.TAP, FOX)
+        assertFalse("reactions are not background scenes", d.isDistractingSceneRunning())
     }
 
     @Test
@@ -220,12 +253,17 @@ class AnimationDirectorTest {
         assertEquals(run(), run())
     }
 
-    private fun pickUntil(d: AnimationDirector, state: CompanionState, name: String) {
+    private fun pickUntil(d: AnimationDirector, state: CompanionState, name: String): AnimationVariant {
         repeat(200) {
-            if (d.pick(state, FOX)!!.resName == name) return
+            val v = d.pick(state, FOX)!!
+            if (v.resName == name) return v
         }
         error("$name never picked")
     }
+
+    /** curl_up played to its last frame: the fox now lies curled up. */
+    private fun curledUp(d: AnimationDirector) =
+        d.onFinished(CompanionState.FALL_ASLEEP, pickUntil(d, CompanionState.FALL_ASLEEP, "curl_up"))
 
     companion object {
         val FOX: (AnimationVariant) -> Boolean = { true }

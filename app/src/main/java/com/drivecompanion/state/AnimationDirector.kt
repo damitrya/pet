@@ -22,11 +22,14 @@ data class PlayContext(
  *   and self-started scenes are at least [SCENE_GAP_MS] apart;
  * - **calm first**: in pools with [AnimTag.BASE] variants those keep at least [MIN_BASE_SHARE] of the chance;
  * - **sequences**: a variant's [AnimationVariant.next] decides what the following states play
- *   (curl_up → sleep_curled → wake_curled), as long as the character has those files.
+ *   (curl_up → sleep_curled → wake_curled), but only once that variant has played to its end — the
+ *   follow-ups continue from its last pose. Any other state in between (a tap while still lying down,
+ *   braking, a turn, a profile switch) drops the sequence, and missing files fall back to the pools.
  *
  * The director only picks files — it never changes the state, so it cannot interrupt ALERT, PET or any
  * other reaction; [isSceneRunning] lets the state machine postpone its own idle one-shots (blink, dozing
- * off) until a scene has finished. Randomness and time are injected for tests.
+ * off) until a scene has finished, and [isDistractingSceneRunning] lets it cut a scene short when the car
+ * starts moving. Randomness and time are injected for tests.
  */
 class AnimationDirector(
     private val mood: CharacterMood,
@@ -42,7 +45,10 @@ class AnimationDirector(
     private val lastPlayedAt = HashMap<String, Long>()
     private var lastSceneAt: Long = Long.MIN_VALUE / 2
 
-    /** Follow-up files requested by the variant that started a sequence. */
+    /** Follow-ups of the variant on screen; they take effect when it reaches its last frame. */
+    private var armedNext: Map<CompanionState, String> = emptyMap()
+
+    /** Follow-up files in effect: the character is in the end pose of a finished sequence step. */
     private val pendingNext = HashMap<CompanionState, String>()
 
     private var current: AnimationVariant? = null
@@ -55,6 +61,7 @@ class AnimationDirector(
      */
     fun pick(state: CompanionState, isAvailable: (AnimationVariant) -> Boolean): AnimationVariant? {
         val now = clock()
+        armedNext = emptyMap()         // something else starts: the previous end pose will not be reached
         if (state !in pendingNext) pendingNext.clear()
         pendingNext.remove(state)?.let { name ->
             val follow = AnimationVariant(name)
@@ -65,13 +72,19 @@ class AnimationDirector(
         val pool = pools[state] ?: return null
         val weights = weightsFor(pool, isAvailable, now)
         val chosen = pool.pick(isAvailable, { weights[it] ?: 0.0 }, random) ?: return null
-        chosen.next.forEach { (s, name) -> pendingNext[s] = name }
+        armedNext = chosen.next
         return played(state, chosen, now)
     }
 
-    /** Called when a variant of a looping state played to its end. */
+    /** Called when a variant played to its last frame (looping cycle or one-shot). */
     fun onFinished(state: CompanionState, variant: AnimationVariant) {
-        if (state == currentState && variant == current) current = null
+        if (state != currentState || variant != current) return
+        current = null
+        if (armedNext.isNotEmpty()) {
+            pendingNext.clear()
+            pendingNext.putAll(armedNext)
+            armedNext = emptyMap()
+        }
     }
 
     /**
@@ -84,8 +97,20 @@ class AnimationDirector(
         return clock() - currentStartedAt < MAX_SCENE_MS
     }
 
+    /**
+     * True while a scene or an active animation (butterfly, tail chasing, shaking…) plays in CALM or
+     * FIDGET: something that should stop at once when the car starts moving.
+     */
+    fun isDistractingSceneRunning(): Boolean {
+        val v = current ?: return false
+        if (currentState != CompanionState.CALM && currentState != CompanionState.FIDGET) return false
+        if (AnimTag.SCENE !in v.tags && AnimTag.ACTIVE !in v.tags) return false
+        return clock() - currentStartedAt < MAX_SCENE_MS
+    }
+
     /** Forgets running sequences and the current scene (profile or character switch). */
     fun reset() {
+        armedNext = emptyMap()
         pendingNext.clear()
         current = null
         currentState = null
