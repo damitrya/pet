@@ -98,7 +98,13 @@ enum class CompanionState(
     FIDGET("", false, "blink"),
 
     /** One-shot morning stretch on the first unlock of the day (Daily profile). */
-    STRETCH("", false, "stretch");
+    STRETCH("", false, "stretch"),
+
+    /**
+     * One-shot goodbye when the user hides the character: it turns into a heart, then the overlay goes away
+     * (see [StateMachine.startFarewell]). Never started by the system.
+     */
+    FAREWELL("", false, "heart_transform");
 }
 
 /**

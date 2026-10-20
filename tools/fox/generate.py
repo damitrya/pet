@@ -12,6 +12,7 @@ Usage:
     python3 tools/fox/generate.py tease sneeze    # only these
     python3 tools/fox/generate.py --wave3         # only the wave 3 animations
     python3 tools/fox/generate.py --car           # only the car companion animations
+    python3 tools/fox/generate.py --wave4         # only the wave 4 animations (heart, music shows, turning)
     python3 tools/fox/generate.py --preview DIR   # also write preview sheet/GIF
     python3 tools/fox/generate.py --gallery       # also write tools/fox/gallery.html
     python3 tools/fox/generate.py --gallery-only  # just rebuild the gallery from existing files
@@ -401,7 +402,68 @@ def default_pose():
         tail_style="face",
         tail_peek=0.0,               # "face" wrap: tail slides down to let the left eye peek out
         props=[],                    # held / nearby objects in body space (see draw_prop), under the paws
+        # --- turning and morphing (0 = the original front view, drawn exactly as before)
+        yaw=0.0,                     # body turn about the vertical axis: 90 = profile facing right, 180 = back
+        head_yaw=0.0,                # extra head turn on top of `yaw` (looking back over the shoulder)
+        feet_dy=(0.0, 0.0),          # lift of the left / right front paw (stepping)
+        tail_scale=1.0,              # tail length (shrinks toward its base)
+        heart=0.0,                   # 0..1 the silhouette morphs into a big heart (see draw_heart_body)
     )
+
+
+class Turn:
+    """
+    2.5D turn about the vertical axis. A point of the front-view drawing at x gets a depth z (toward the
+    viewer, model units); turned by `yaw` it lands at screen x = 64 + (x - 64)·cos + z·sin. Flat details
+    (eyes, blush, belly) narrow with the angle between their surface and the viewer and vanish once
+    they face away, so profile and back views are drawn, not squeezed or mirrored. yaw = 0 is the
+    identity: every method returns its input unchanged, the front view stays byte-identical.
+    """
+
+    def __init__(self, yaw):
+        self.on = yaw != 0.0
+        r = math.radians(yaw)
+        self.r = r
+        self.c, self.s = math.cos(r), math.sin(r)
+
+    def x(self, x, z):
+        """Screen x of the model point (x, z)."""
+        if not self.on:
+            return x
+        return 64 + (x - 64) * self.c + z * self.s
+
+    def depth(self, x, z):
+        """Distance toward the viewer after the turn (> 0: in front of the centre)."""
+        return -(x - 64) * self.s + z * self.c
+
+    def radius(self, rx, rz):
+        """Visible half-width of an upright ellipsoid with half-width rx and half-depth rz."""
+        if not self.on:
+            return rx
+        return math.hypot(rx * self.c, rz * self.s)
+
+    def facing(self, x, z):
+        """cos of the angle between the surface at (x, z) and the line of sight (1 = faces the viewer)."""
+        return math.cos(self.r + math.atan2(x - 64, z))
+
+    def decal(self, x, z, floor=0.0):
+        """Width factor of a flat detail on the surface at (x, z): 1 in the front view, 0 once hidden.
+        `floor` keeps a sliver of rounded details (snout, chest) visible from the side."""
+        if not self.on:
+            return 1.0
+        f = self.facing(x, z)
+        front = math.cos(math.atan2(x - 64, z))
+        if front > 0.2:                 # details on the face / chest: full width in the front view
+            f /= front
+        return clamp(max(f, floor * ramp(self.facing(x, z), -0.3, 0.05)))
+
+    def tail_base(self):
+        """The tail grows out of the back: on the right in the front view, behind in profile, centred from behind."""
+        return 64 + 20 * self.c * (1 + self.c) / 2 - 18 * self.s
+
+    def tail_stretch(self):
+        """Horizontal direction of the tail: it points right and back, so it swings behind in profile."""
+        return self.c - 0.65 * self.s
 
 
 GROUND = (64, 122)
@@ -444,7 +506,7 @@ def _tail_angle(pose):
     return tail_angle
 
 
-def _tail_masks(centre, tail_tf):
+def _tail_masks(centre, tail_tf, thick=1.0):
     tail_mask = Canvas.new_mask()
     tip_mask = Canvas.new_mask()
     for i, (x, y) in enumerate(centre):
@@ -452,6 +514,7 @@ def _tail_masks(centre, tail_tf):
         r = 6 + 9 * math.sin(math.pi * min(1.0, t * 0.92 + 0.08)) ** 0.8
         if t > 0.9:
             r *= 1 - (t - 0.9) * 4
+        r *= thick
         Canvas.poly_mask(ellipse_pts(x, y, r, r, n=32), tail_tf, tail_mask)
         if t > 0.74:
             Canvas.poly_mask(ellipse_pts(x, y, r, r, n=32), tail_tf, tip_mask)
@@ -460,6 +523,9 @@ def _tail_masks(centre, tail_tf):
 
 def draw_character(pose):
     cv = Canvas()
+    tb = Turn(pose["yaw"])                          # body, tail, paws
+    th = Turn(pose["yaw"] + pose["head_yaw"])       # head, ears, face
+    heart = pose["heart"]
 
     body_tf = (FIT
                @ Tf.translate(pose["dx"], pose["dy"])
@@ -477,79 +543,156 @@ def draw_character(pose):
     # ---- tail (behind everything; a wrapped tail is drawn again in front further down)
     # (not squashed with the body: lying down, the wrapped tail keeps its target shape)
     tail_tf = body_tf @ Tf.rotate(_tail_angle(pose), *TAIL_BASE)
-    tail_mask, tip_mask = _tail_masks(tail_centre(pose), tail_tf)
-    cv.paint_gradient(tail_mask, ORANGE_TOP, ORANGE_BOT, g(50 + grad_dy), g(110 + grad_dy))
-    cv.paint(tip_mask, CREAM)
+    centre = tail_centre(pose)
+    k = pose["tail_scale"]
+    if heart:                                       # the tail tucks in behind the heart
+        k *= 1 - 0.85 * ramp(heart, 0.0, 0.8)
+        tail_tf = body_tf @ Tf.rotate(_tail_angle(pose) - 50 * heart, *TAIL_BASE)
+    if k != 1.0:
+        centre = [(TAIL_BASE[0] + (x - TAIL_BASE[0]) * k, TAIL_BASE[1] + (y - TAIL_BASE[1]) * k) for x, y in centre]
+    tail_front = False
+    if tb.on:
+        # The centre line turns with the body; the fur keeps its thickness (seen end-on it is a fluffy ball).
+        bx, fx = tb.tail_base(), tb.tail_stretch()
+        centre = [(bx + (x - TAIL_BASE[0]) * fx, y) for x, y in centre]
+        tail_tf = body_tf @ Tf.rotate(pose["tail"], bx, TAIL_BASE[1])   # no soft cap: it may point anywhere
+        tail_front = tb.c < -0.2                    # from behind the tail is in front of the back
+    tail_mask, tip_mask = _tail_masks(centre, tail_tf, 0.5 + 0.5 * k if k != 1.0 else 1.0)
+    if not tail_front:
+        cv.paint_gradient(tail_mask, ORANGE_TOP, ORANGE_BOT, g(50 + grad_dy), g(110 + grad_dy))
+        cv.paint(tip_mask, CREAM)
     for prop in pose["props"]:
         if prop.get("back"):
             draw_prop(cv, prop, body_tf)
 
-    # ---- body
-    body = ellipse_pts(64, 103, 30, 20)
-    body_mask = Canvas.poly_mask(body, part_tf)
-    cv.paint_gradient(body_mask, ORANGE_TOP, ORANGE_BOT, g(88 + grad_dy), g(122 + grad_dy))
-    belly = Canvas.poly_mask(ellipse_pts(64, 108, 15, 13), part_tf)
-    cv.paint(clip(belly, body_mask), CREAM)
-    neck_shadow = Canvas.poly_mask(ellipse_pts(64, 88, 30, 8), part_tf)
-    cv.paint(clip(neck_shadow, body_mask), ORANGE_SHADE, 0.45)
-    for px in (49, 79):
-        cv.paint(Canvas.poly_mask(ellipse_pts(px, 119, 9, 5.5), part_tf), PAW)
+    arms = pose["arm"]
+    arms = [arms] if isinstance(arms, dict) else list(arms or [])
+    far_arms = [a for a in arms if tb.on and tb.depth(64 + a["side"] * 22, 8) < -4]
+    for arm in far_arms:                            # the far paw in profile, behind the body
+        draw_arm(cv, arm, body_tf, tb)
 
-    # ---- ears
+    # ---- body
+    fdy = pose["feet_dy"]
+    feet = [(49, 16, fdy[0], 1.0), (79, 16, fdy[1], 1.0)]
+    if tb.on:
+        hind = ramp(1 - tb.c, 0.0, 0.3)             # hind paws show up once the fox turns
+        feet += [(52, -18, 0.0, hind), (76, -18, 0.0, hind)]
+
+    def paint_feet(front):
+        for px, z, dy, op in feet:
+            if (tb.depth(px, z) >= 0 if tb.on else True) != front:
+                continue
+            cv.paint(Canvas.poly_mask(ellipse_pts(tb.x(px, z), 119 + dy, 9, 5.5), part_tf), PAW, op)
+
+    if tb.on and not heart:
+        paint_feet(False)
+    brx = tb.radius(30, 34)
+    body = ellipse_pts(64, 103, brx, 20)
+    body_mask = Canvas.poly_mask(body, part_tf)
+    if not heart:
+        cv.paint_gradient(body_mask, ORANGE_TOP, ORANGE_BOT, g(88 + grad_dy), g(122 + grad_dy))
+        bw = tb.decal(64, 22, 0.35)
+        belly = Canvas.poly_mask(ellipse_pts(tb.x(64, 22), 108, 15 * bw, 13), part_tf)
+        cv.paint(clip(belly, body_mask), CREAM)
+        neck_shadow = Canvas.poly_mask(ellipse_pts(64, 88, brx, 8), part_tf)
+        cv.paint(clip(neck_shadow, body_mask), ORANGE_SHADE, 0.45)
+        if tb.on:
+            sw = tb.decal(64, -30)                      # the spine, from behind
+            if sw > 0.02:
+                spine = Canvas.poly_mask(ellipse_pts(tb.x(64, -30), 104, 10 * sw, 17), part_tf)
+                cv.paint(clip(spine, body_mask), ORANGE_SHADE, 0.35)
+        paint_feet(True)
+
+    # ---- ears (the nearer one last; from behind their backs show, without the pink inside)
     es = pose["ear_scale"]
-    for side in (-1, 1):
-        bx = 64 + side * 22
+    ear_in = 0.0
+    if heart:                                       # the ears lean together and sink into the lobes
+        es *= 1 - 0.85 * ramp(heart, 0.05, 0.8)
+        ear_in = 14 * heart
+    ear_w = 0.4 + 0.6 * abs(th.c) if th.on else 1.0
+    inner_op = ramp(th.c, -0.1, 0.3) if th.on else 1.0
+    sides = (-1, 1)
+    if th.on:
+        sides = sorted(sides, key=lambda sd: th.depth(64 + sd * 22, -2))
+    for side in sides:
+        bx = th.x(64 + side * 22, -2)
         ang = side * pose["ear_out"] + (pose["ear_l"] if side < 0 else pose["ear_r"])
+        if heart:
+            ang -= side * ear_in
         side_scale = pose["ear_scale_l"] if side < 0 else pose["ear_scale_r"]
         ear_tf = head_tf @ Tf.rotate(ang, bx, 36) @ Tf.scale(1, es * side_scale, bx, 36)
+        if th.on:
+            ear_tf = ear_tf @ Tf.scale(ear_w, 1, bx, 36)
         outer = chaikin([(bx - side * 14, 40), (bx + side * 9, 6), (bx + side * 13, 40)], 3)
         inner = chaikin([(bx - side * 7, 37), (bx + side * 8, 13), (bx + side * 9, 37)], 3)
         ear_mask = Canvas.poly_mask(outer, ear_tf)
         cv.paint_gradient(ear_mask, ORANGE_TOP, ORANGE_BOT, g(6 + grad_dy), g(40 + grad_dy))
-        cv.paint(clip(Canvas.poly_mask(inner, ear_tf), ear_mask), EAR_INNER)
+        cv.paint(clip(Canvas.poly_mask(inner, ear_tf), ear_mask), EAR_INNER, inner_op)
         tip = Canvas.poly_mask(ellipse_pts(bx + side * 8, 12, 8, 7), ear_tf)
         cv.paint(clip(tip, ear_mask), PAW, 0.9)
 
     # ---- head
-    head_mask = Canvas.poly_mask(ellipse_pts(64, 58, 40, 33), head_tf)
+    head_mask = Canvas.poly_mask(ellipse_pts(64, 58, th.radius(40, 34), 33), head_tf)
     for side in (-1, 1):
-        tuft = chaikin([(64 + side * 30, 58), (64 + side * 47, 80), (64 + side * 22, 82)], 2)
+        tuft = chaikin([(th.x(64 + side * 30, 0), 58), (th.x(64 + side * 47, 6), 80), (th.x(64 + side * 22, 14), 82)], 2)
         Canvas.poly_mask(tuft, head_tf, head_mask)
-    cv.paint_gradient(head_mask, ORANGE_TOP, ORANGE_BOT, g(24 + grad_dy), g(90 + grad_dy))
+    if th.on:                                       # the snout sticks out in profile
+        Canvas.poly_mask(ellipse_pts(th.x(64, 30), 76, 13, 9.5), head_tf, head_mask)
+    if heart:
+        head_mask = draw_heart_body(cv, pose, body_tf, part_tf, head_mask, body_mask, g, feet)
+    else:
+        cv.paint_gradient(head_mask, ORANGE_TOP, ORANGE_BOT, g(24 + grad_dy), g(90 + grad_dy))
 
     face = Canvas.new_mask()
-    for pts in (ellipse_pts(47, 74, 19, 14, -12), ellipse_pts(81, 74, 19, 14, 12),
-                ellipse_pts(64, 81, 15, 9)):
-        Canvas.poly_mask(pts, head_tf, face)
-    cv.paint(clip(face, head_mask), CREAM)
+    for x, y, rx, ry, rot, z, fl in ((47, 74, 19, 14, -12, 22, 0.25), (81, 74, 19, 14, 12, 22, 0.25),
+                                     (64, 81, 15, 9, 0, 30, 0.55)):
+        w = th.decal(x, z, fl)
+        if w > 0.02:
+            Canvas.poly_mask(ellipse_pts(th.x(x, z), y, rx * w, ry, rot), head_tf, face)
+    cv.paint(clip(face, head_mask), CREAM, 1 - 0.45 * heart)
 
     # forehead highlight
-    hl = Canvas.poly_mask(ellipse_pts(48, 37, 12, 5, -18), head_tf)
-    cv.paint(clip(hl, head_mask), WHITE, 0.35)
+    w = th.decal(48, 24)
+    if w > 0.02:
+        hl = Canvas.poly_mask(ellipse_pts(th.x(48, 24), 37, 12 * w, 5, -18), head_tf)
+        cv.paint(clip(hl, head_mask), WHITE, 0.35)
+    if th.on:
+        nw = th.decal(64, -30)                      # back of the head: a darker nape
+        if nw > 0.02:
+            nape = Canvas.poly_mask(ellipse_pts(th.x(64, -30), 72, 24 * nw, 15), head_tf)
+            cv.paint(clip(nape, head_mask), ORANGE_SHADE, 0.3)
 
     # blush
     if pose["blush"] > 0:
         for side in (-1, 1):
-            m = Canvas.poly_mask(ellipse_pts(64 + side * 27, 73, 6.5, 3.6), head_tf)
-            cv.paint(clip(m, head_mask), BLUSH, pose["blush"])
+            w = th.decal(64 + side * 27, 18)
+            if w > 0.02:
+                m = Canvas.poly_mask(ellipse_pts(th.x(64 + side * 27, 18), 73, 6.5 * w, 3.6), head_tf)
+                cv.paint(clip(m, head_mask), BLUSH, pose["blush"])
 
-    draw_eyes(cv, pose, head_tf)
+    draw_eyes(cv, pose, head_tf, th, head_mask if th.on else None)
 
     # nose
-    nose = chaikin([(59, 70), (69, 70), (64, 75.5)], 3)
-    cv.paint(Canvas.poly_mask(nose, head_tf), DARK)
-    cv.paint(Canvas.poly_mask(ellipse_pts(62.3, 70.8, 1.6, 0.9), head_tf), WHITE, 0.7)
-    if pose["nose_wrinkle"] > 0:
-        k = pose["nose_wrinkle"]
-        for side in (-1, 1):
-            crease = bezier((64 + side * 2.5, 67.5), (64 + side * 5.5, 66 - 1.8 * k), (64 + side * 8.5, 67.8), 8)
-            cv.paint(Canvas.stroke_mask(crease, 1.2, head_tf), DARK, 0.75 * k)
+    nx, nw = th.x(64, 40), th.decal(64, 40, 0.55)
+    if nw > 0.02:
+        nose = chaikin([(nx - 5 * nw, 70), (nx + 5 * nw, 70), (nx, 75.5)], 3)
+        cv.paint(Canvas.poly_mask(nose, head_tf), DARK)
+        cv.paint(Canvas.poly_mask(ellipse_pts(nx - 1.7 * nw if th.on else 62.3, 70.8, 1.6 * nw, 0.9), head_tf), WHITE, 0.7)
+        if pose["nose_wrinkle"] > 0:
+            k = pose["nose_wrinkle"]
+            for side in (-1, 1):
+                crease = bezier((nx + side * 2.5 * nw, 67.5), (nx + side * 5.5 * nw, 66 - 1.8 * k),
+                                (nx + side * 8.5 * nw, 67.8), 8)
+                cv.paint(Canvas.stroke_mask(crease, 1.2, head_tf), DARK, 0.75 * k)
 
-    draw_mouth(cv, pose, head_tf)
+    mw = th.decal(64, 36, 0.45)
+    if mw > 0.02:
+        draw_mouth(cv, pose, head_tf, th.x(64, 36), mw)
 
-    if pose["tail_wrap"] > 0:
+    if pose["tail_wrap"] > 0 or tail_front:
         # The wrapped tail crosses in front of the face/body: own outline, faded in while it moves around.
-        front = ramp(pose["tail_wrap"], 0.08, 0.2)
+        # Seen from behind, the tail is in front of the back the same way.
+        front = 1.0 if tail_front else ramp(pose["tail_wrap"], 0.08, 0.2)
         if front > 0:
             layer = Canvas()
             layer.paint_gradient(tail_mask, ORANGE_TOP, ORANGE_BOT, g(50 + grad_dy), g(110 + grad_dy))
@@ -563,9 +706,9 @@ def draw_character(pose):
         if not prop.get("back") and not prop.get("front"):
             draw_prop(cv, prop, body_tf)
 
-    arms = pose["arm"]
-    for arm in ([arms] if isinstance(arms, dict) else arms or []):
-        draw_arm(cv, arm, body_tf)
+    for arm in arms:
+        if arm not in far_arms:
+            draw_arm(cv, arm, body_tf, tb)
 
     for prop in pose["props"]:
         if prop.get("front"):
@@ -577,112 +720,199 @@ def draw_character(pose):
     return out
 
 
-def draw_eyes(cv, pose, tf):
+HEART_CENTRE = (64, 67)          # body space; the heart reaches from y ≈ 30 to 120 and x 14…114
+HEART_SIZE = 50
+HEART_TOP = (255, 150, 112)
+HEART_BOT = (246, 86, 128)
+MORPH_RAYS = 180
+
+
+def _radial_extent(mask, centre, angles):
+    """Distance from `centre` (supersampled px) to the farthest pixel of `mask` along each ray."""
+    a = np.asarray(mask) > 127
+    rs = np.arange(0, W, 1.0)
+    xs = np.rint(centre[0] + np.outer(np.cos(angles), rs)).astype(int)
+    ys = np.rint(centre[1] + np.outer(np.sin(angles), rs)).astype(int)
+    ok = (xs >= 0) & (xs < W) & (ys >= 0) & (ys < W)
+    hit = np.zeros_like(ok)
+    hit[ok] = a[ys[ok], xs[ok]]
+    idx = np.where(hit, np.arange(1, len(rs) + 1)[None, :], 0).max(axis=1)
+    return idx.astype(float)
+
+
+def draw_heart_body(cv, pose, body_tf, part_tf, head_mask, body_mask, g, feet):
+    """
+    Head and body as one silhouette that morphs into a big heart (`heart` 0…1). Every ray from the chest
+    moves from the fox's outline to the heart's, so the shape really transforms (no cross-fade of two
+    pictures); the colours drift from fox orange to orange-pink. The face stays on top (drawn by the
+    caller), the paws tuck in. Returns the silhouette mask (the face details are clipped to it).
+    """
+    m = clamp(pose["heart"])
+    union = ImageChops.lighter(head_mask, body_mask)
+    heart_mask = Canvas.poly_mask(heart_pts(*HEART_CENTRE, HEART_SIZE), body_tf)
+    c = body_tf.apply([(64, 86)])[0] * SS
+    angles = np.linspace(0, 2 * math.pi, MORPH_RAYS, endpoint=False)
+    r = (1 - m) * _radial_extent(union, c, angles) + m * _radial_extent(heart_mask, c, angles)
+    pts = [((c[0] + rr * math.cos(a)) / SS, (c[1] + rr * math.sin(a)) / SS) for a, rr in zip(angles, r)]
+    blob = Canvas.poly_mask(pts)
+    if m < 0.5:
+        blob = ImageChops.lighter(blob, clip(union, Canvas.poly_mask(pts)))
+    dy = pose["dy"]
+    cv.paint_gradient(blob, ORANGE_TOP, ORANGE_BOT, g(24 + dy), g(90 + dy))
+    below = clip(ImageChops.subtract(body_mask, head_mask), blob)
+    cv.paint_gradient(below, ORANGE_TOP, ORANGE_BOT, g(88 + dy), g(122 + dy), 1 - m)
+    cv.paint(clip(below, Canvas.poly_mask(ellipse_pts(64, 88, 30, 8), part_tf)), ORANGE_SHADE, 0.45 * (1 - m))
+    cv.paint(clip(clip(Canvas.poly_mask(ellipse_pts(64, 108, 15, 13), part_tf), body_mask), below), CREAM,
+             1 - ramp(m, 0.0, 0.6))
+    cv.paint_gradient(blob, HEART_TOP, HEART_BOT, g(30 + dy), g(118 + dy), smooth(m))
+    if m > 0:
+        shine = Canvas.poly_mask(ellipse_pts(38, 44, 9, 4.5, -38), body_tf)
+        cv.paint(clip(shine, blob), WHITE, 0.45 * m)
+    # paws tuck into the heart's tip
+    f = 1 - ramp(m, 0.0, 0.6)
+    if f > 0.02:
+        for px, _z, fy, _op in feet[:2]:
+            ell = ellipse_pts(lerp(64, px, f), lerp(112, 119 + fy, f), 9 * f, 5.5 * f)
+            cv.paint(Canvas.poly_mask(ell, part_tf), PAW)
+    return blob
+
+
+def draw_eyes(cv, pose, tf, turn=None, within=None):
     lx, ly = pose["look"]
+
+    def paint(mask, color, op=1.0):
+        cv.paint(mask if within is None else clip(mask, within), color, op)
+
     for side in (-1, 1):
         kind = (pose["eye_l"] if side < 0 else pose["eye_r"]) or pose["eyes"]
+        w = 1.0
         ex, ey = 64 + side * 17 + lx * 2.2, 59 + ly * 1.6
+        if turn is not None and turn.on:
+            w = turn.decal(64 + side * 17, 28)
+            if w < 0.04:
+                continue                 # turned away behind the head
+            ex = turn.x(64 + side * 17, 28) + lx * 2.2 * w
         if pose["cross"]:
             ex -= side * 2.2 * pose["cross"]
         if kind == "open":
             op = pose["open"] * (pose["open_l"] if side < 0 else pose["open_r"])
             op = clamp(op, 0.0, 1.0)
             if op < 0.2:
-                arc = bezier((ex - 6, ey + 1), (ex, ey + 5), (ex + 6, ey + 1), 12)
-                cv.paint(Canvas.stroke_mask(arc, 2.0, tf), DARK)
+                arc = bezier((ex - 6 * w, ey + 1), (ex, ey + 5), (ex + 6 * w, ey + 1), 12)
+                paint(Canvas.stroke_mask(arc, 2.0, tf), DARK)
                 continue
             ry = 8.2 * op
-            eye_mask = Canvas.poly_mask(ellipse_pts(ex, ey + (8.2 - ry) * 0.5, 6.3, ry), tf)
-            cv.paint(eye_mask, DARK)
-            hx, hy = ex + 1.8 + lx * 0.8, ey - 3.0 * op + ly * 0.6
-            cv.paint(clip(Canvas.poly_mask(ellipse_pts(hx, hy, 2.4, 2.4 * min(1, op * 1.3)), tf), eye_mask), WHITE)
-            cv.paint(clip(Canvas.poly_mask(ellipse_pts(ex - 2.2, ey + 3.2 * op, 1.2, 1.2), tf), eye_mask), WHITE, 0.85)
+            eye_mask = Canvas.poly_mask(ellipse_pts(ex, ey + (8.2 - ry) * 0.5, 6.3 * w, ry), tf)
+            paint(eye_mask, DARK)
+            hx, hy = ex + 1.8 * w + lx * 0.8 * w, ey - 3.0 * op + ly * 0.6
+            cv.paint(clip(Canvas.poly_mask(ellipse_pts(hx, hy, 2.4 * w, 2.4 * min(1, op * 1.3)), tf), eye_mask), WHITE)
+            cv.paint(clip(Canvas.poly_mask(ellipse_pts(ex - 2.2 * w, ey + 3.2 * op, 1.2 * w, 1.2), tf), eye_mask), WHITE, 0.85)
         elif kind == "happy":
-            arc = bezier((ex - 6.5, ey + 3), (ex, ey - 7), (ex + 6.5, ey + 3), 14)
-            cv.paint(Canvas.stroke_mask(arc, 2.4, tf), DARK)
+            arc = bezier((ex - 6.5 * w, ey + 3), (ex, ey - 7), (ex + 6.5 * w, ey + 3), 14)
+            paint(Canvas.stroke_mask(arc, 2.4, tf), DARK)
         elif kind == "closed":
-            arc = bezier((ex - 6.5, ey), (ex, ey + 5.5), (ex + 6.5, ey), 14)
-            cv.paint(Canvas.stroke_mask(arc, 2.2, tf), DARK)
+            arc = bezier((ex - 6.5 * w, ey), (ex, ey + 5.5), (ex + 6.5 * w, ey), 14)
+            paint(Canvas.stroke_mask(arc, 2.2, tf), DARK)
         elif kind == "grumpy":
             # lower half of the eye under a lid slanting down toward the nose
             lid_out, lid_in = ey - 1.5, ey + 1.8
-            lid = [(ex - side * 8, lid_out), (ex + side * 8, lid_in)]
-            below = Canvas.poly_mask([lid[0], lid[1], (ex + side * 8, ey + 12), (ex - side * 8, ey + 12)], tf)
-            eye_mask = clip(Canvas.poly_mask(ellipse_pts(ex, ey + 1, 6.3, 7.5), tf), below)
-            cv.paint(eye_mask, DARK)
-            cv.paint(clip(Canvas.poly_mask(ellipse_pts(ex + 1.6, ey + 3.2, 1.7, 1.7), tf), eye_mask), WHITE)
-            cv.paint(Canvas.stroke_mask([(ex - side * 7.5, lid_out - 0.5), (ex + side * 7.5, lid_in - 0.5)], 2.2, tf), DARK)
+            lid = [(ex - side * 8 * w, lid_out), (ex + side * 8 * w, lid_in)]
+            below = Canvas.poly_mask([lid[0], lid[1], (ex + side * 8 * w, ey + 12), (ex - side * 8 * w, ey + 12)], tf)
+            eye_mask = clip(Canvas.poly_mask(ellipse_pts(ex, ey + 1, 6.3 * w, 7.5), tf), below)
+            paint(eye_mask, DARK)
+            cv.paint(clip(Canvas.poly_mask(ellipse_pts(ex + 1.6 * w, ey + 3.2, 1.7 * w, 1.7), tf), eye_mask), WHITE)
+            paint(Canvas.stroke_mask([(ex - side * 7.5 * w, lid_out - 0.5), (ex + side * 7.5 * w, lid_in - 0.5)], 2.2, tf), DARK)
         elif kind == "wide":
-            white = Canvas.poly_mask(ellipse_pts(ex, ey, 8, 9), tf)
-            cv.paint(Canvas.poly_mask(ellipse_pts(ex, ey, 9.2, 10.2), tf), DARK)
-            cv.paint(white, WHITE)
-            cv.paint(Canvas.poly_mask(ellipse_pts(ex + lx * 2, ey + 0.5 + ly, 3.6, 4.2), tf), DARK)
-            cv.paint(Canvas.poly_mask(ellipse_pts(ex + 1.2 + lx * 2, ey - 1.2 + ly, 1.2, 1.2), tf), WHITE)
+            white = Canvas.poly_mask(ellipse_pts(ex, ey, 8 * w, 9), tf)
+            paint(Canvas.poly_mask(ellipse_pts(ex, ey, 9.2 * w, 10.2), tf), DARK)
+            paint(white, WHITE)
+            paint(Canvas.poly_mask(ellipse_pts(ex + lx * 2 * w, ey + 0.5 + ly, 3.6 * w, 4.2), tf), DARK)
+            paint(Canvas.poly_mask(ellipse_pts(ex + 1.2 * w + lx * 2 * w, ey - 1.2 + ly, 1.2 * w, 1.2), tf), WHITE)
         elif kind == "squeeze":
             # tightly shut ">  <" (sneezing): the point of each chevron faces the nose
-            tip = (ex - side * 3.5, ey + 0.5)
-            pts = [(ex + side * 4.5, ey - 4), tip, (ex + side * 4.5, ey + 5)]
-            cv.paint(Canvas.stroke_mask(pts, 2.3, tf), DARK)
+            tip = (ex - side * 3.5 * w, ey + 0.5)
+            pts = [(ex + side * 4.5 * w, ey - 4), tip, (ex + side * 4.5 * w, ey + 5)]
+            paint(Canvas.stroke_mask(pts, 2.3, tf), DARK)
 
 
-def draw_mouth(cv, pose, tf):
+def draw_mouth(cv, pose, tf, mx=64, mw=1.0):
+    """Mouth centred at `mx` (the snout turns away in profile), `mw` = its width factor."""
     kind = pose["mouth"]
     if kind == "w":
         for side in (-1, 1):
-            arc = bezier((64, 75.5), (64 + side * 1.5, 79.5), (64 + side * 5, 77.5), 10)
+            arc = bezier((mx, 75.5), (mx + side * 1.5 * mw, 79.5), (mx + side * 5 * mw, 77.5), 10)
             cv.paint(Canvas.stroke_mask(arc, 1.5, tf), DARK)
     elif kind == "open":
         k = clamp(pose["mouth_open"], 0.2, 1.0)
         top = 77.5
-        shape = chaikin([(58.5, top), (69.5, top), (66.5, top + 6.5 * k), (61.5, top + 6.5 * k)], 3)
+        shape = chaikin([(mx - 5.5 * mw, top), (mx + 5.5 * mw, top), (mx + 2.5 * mw, top + 6.5 * k),
+                         (mx - 2.5 * mw, top + 6.5 * k)], 3)
         m = Canvas.poly_mask(shape, tf)
         cv.paint(m, MOUTH)
-        tongue = Canvas.poly_mask(ellipse_pts(64, top + 6.0 * k, 3.6, 2.6 * k), tf)
+        tongue = Canvas.poly_mask(ellipse_pts(mx, top + 6.0 * k, 3.6 * mw, 2.6 * k), tf)
         cv.paint(clip(tongue, m), TONGUE)
         for side in (-1, 1):
-            arc = bezier((64, 75.5), (64 + side * 1.5, 78), (64 + side * 5.5, 77.5), 8)
+            arc = bezier((mx, 75.5), (mx + side * 1.5 * mw, 78), (mx + side * 5.5 * mw, 77.5), 8)
             cv.paint(Canvas.stroke_mask(arc, 1.4, tf), DARK)
     elif kind == "yawn":
         k = clamp(pose["mouth_open"], 0.0, 1.0)
         if k < 0.1:
-            draw_mouth(cv, dict(pose, mouth="w"), tf)
+            draw_mouth(cv, dict(pose, mouth="w"), tf, mx, mw)
             return
-        m = Canvas.poly_mask(ellipse_pts(64, 79 + 3 * k, 4 + 3.5 * k, 2 + 6.5 * k), tf)
+        m = Canvas.poly_mask(ellipse_pts(mx, 79 + 3 * k, (4 + 3.5 * k) * mw, 2 + 6.5 * k), tf)
         cv.paint(m, MOUTH)
-        cv.paint(clip(Canvas.poly_mask(ellipse_pts(64, 81 + 7 * k, 4.5 * k, 3 * k), tf), m), TONGUE)
+        cv.paint(clip(Canvas.poly_mask(ellipse_pts(mx, 81 + 7 * k, 4.5 * k * mw, 3 * k), tf), m), TONGUE)
     elif kind == "frown":
-        arc = bezier((58.5, 81), (64, 76.5), (69.5, 81), 12)
+        arc = bezier((mx - 5.5 * mw, 81), (mx, 76.5), (mx + 5.5 * mw, 81), 12)
         cv.paint(Canvas.stroke_mask(arc, 1.6, tf), DARK)
     elif kind == "o":
-        cv.paint(Canvas.poly_mask(ellipse_pts(64, 80.5, 3.6, 4.4), tf), MOUTH)
-        cv.paint(Canvas.poly_mask(ellipse_pts(64, 82.5, 2.2, 1.6), tf), TONGUE)
+        cv.paint(Canvas.poly_mask(ellipse_pts(mx, 80.5, 3.6 * mw, 4.4), tf), MOUTH)
+        cv.paint(Canvas.poly_mask(ellipse_pts(mx, 82.5, 2.2 * mw, 1.6), tf), TONGUE)
     elif kind == "smile":
         # content closed smile, wider than the "w"
-        arc = bezier((57, 76.5), (64, 83.5), (71, 76.5), 14)
+        arc = bezier((mx - 7 * mw, 76.5), (mx, 83.5), (mx + 7 * mw, 76.5), 14)
         cv.paint(Canvas.stroke_mask(arc, 1.6, tf), DARK)
         for side in (-1, 1):
-            cv.paint(Canvas.stroke_mask([(64 + side * 7, 76.5), (64 + side * 8.2, 75.4)], 1.3, tf), DARK)
+            cv.paint(Canvas.stroke_mask([(mx + side * 7 * mw, 76.5), (mx + side * 8.2 * mw, 75.4)], 1.3, tf), DARK)
+    elif kind == "aa":
+        # singing "a": a tall open mouth, `mouth_open` 0…1
+        k = clamp(pose["mouth_open"], 0.2, 1.0)
+        m = Canvas.poly_mask(ellipse_pts(mx, 79.5 + 2 * k, (3.4 + 1.4 * k) * mw, 2.6 + 4.6 * k), tf)
+        cv.paint(m, MOUTH)
+        cv.paint(clip(Canvas.poly_mask(ellipse_pts(mx, 82 + 4.4 * k, 3.6 * mw, 2.4 * k), tf), m), TONGUE)
+    elif kind == "ee":
+        # singing "e": a wide, flat open smile
+        k = clamp(pose["mouth_open"], 0.2, 1.0)
+        shape = chaikin([(mx - 7 * mw, 76.5), (mx + 7 * mw, 76.5), (mx + 4 * mw, 79.5 + 2.6 * k),
+                         (mx - 4 * mw, 79.5 + 2.6 * k)], 3)
+        m = Canvas.poly_mask(shape, tf)
+        cv.paint(m, MOUTH)
+        cv.paint(clip(Canvas.poly_mask(ellipse_pts(mx, 80.5 + 2.4 * k, 3 * mw, 1.6 * k), tf), m), TONGUE)
     if pose["tongue"] > 0:
         # tongue sticking out below the mouth ("bleh" / licking)
         k = clamp(pose["tongue"])
-        tx = 64 + pose["tongue_dx"]
-        cv.paint(Canvas.poly_mask(ellipse_pts(tx, 79.5 + 3.2 * k, 4.2, 1.2 + 3.8 * k), tf), MOUTH)
-        cv.paint(Canvas.poly_mask(ellipse_pts(tx, 79.5 + 3.2 * k, 3.3, 0.6 + 3.2 * k), tf), TONGUE)
+        tx = mx + pose["tongue_dx"] * mw
+        cv.paint(Canvas.poly_mask(ellipse_pts(tx, 79.5 + 3.2 * k, 4.2 * mw, 1.2 + 3.8 * k), tf), MOUTH)
+        cv.paint(Canvas.poly_mask(ellipse_pts(tx, 79.5 + 3.2 * k, 3.3 * mw, 0.6 + 3.2 * k), tf), TONGUE)
         if k > 0.4:
             cv.paint(Canvas.stroke_mask([(tx, 79.5 + 1.5 * k), (tx, 79.5 + 4.6 * k)], 0.9, tf), MOUTH, 0.6)
 
 
-def draw_arm(cv, arm, tf):
-    """Raised front paw: an orange limb from the shoulder with a dark paw at the end."""
+def draw_arm(cv, arm, tf, turn=None):
+    """Raised front paw: an orange limb from the shoulder with a dark paw at the end (`k` = thickness)."""
     side = arm["side"]
-    shoulder = (64 + side * 22, 96)
+    k = arm.get("k", 1.0)
+    sx = 64 + side * 22
+    if turn is not None and turn.on:
+        sx = turn.x(sx, 8)
+    shoulder = (sx, 96)
     paw = (arm["x"], arm["y"])
     elbow = (lerp(shoulder[0], paw[0], 0.5) + side * 6, lerp(shoulder[1], paw[1], 0.5) + 2)
     limb = bezier(shoulder, elbow, paw, 16)
-    cv.paint(Canvas.stroke_mask(limb, 16, tf), OUTLINE)
-    cv.paint(Canvas.stroke_mask(limb, 12.5, tf), ORANGE_TOP)
-    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 8.2, 7.4), tf), OUTLINE)
-    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.6, 5.8), tf), PAW)
+    cv.paint(Canvas.stroke_mask(limb, 16 * k, tf), OUTLINE)
+    cv.paint(Canvas.stroke_mask(limb, 12.5 * k, tf), ORANGE_TOP)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 8.2 * k, 7.4 * k), tf), OUTLINE)
+    cv.paint(Canvas.poly_mask(ellipse_pts(paw[0], paw[1], 6.6 * k, 5.8 * k), tf), PAW)
 
 
 # ---------------------------------------------------------------- props
@@ -891,10 +1121,60 @@ def _prop_flag(cv, pr, tf, body_tf, lb):
             cv.paint(Canvas.poly_mask(quad, tf), FLAG_DARK if (c + r) % 2 else WHITE)
 
 
+MIC_HEAD = (0.0, -14.0)        # mic ball in the prop's own coordinates; the grip (paw) is the origin
+MIC_DARK = (58, 60, 74)
+WOOD = (238, 182, 110)
+WOOD_DARK = (176, 108, 56)
+NECK_WOOD = (128, 78, 44)
+STRING = (252, 244, 226)
+
+
+def _prop_mic(cv, pr, tf, body_tf, lb):
+    """Hand-held microphone: the grip is the origin (in the paw), the ball points along -y."""
+    cv.paint(Canvas.poly_mask(_rect_pts(0, 0.5, 4.6, 14, 0, 2), tf), MIC_DARK)
+    cv.paint(Canvas.stroke_mask([(-1, -5), (-1, 5)], 0.8, tf), (110, 114, 132), 0.8)
+    cv.paint(Canvas.poly_mask(_rect_pts(0, -8, 6.4, 3, 0, 1), tf), STEEL_DARK)
+    ball = Canvas.poly_mask(ellipse_pts(*MIC_HEAD, 5.6, 5.6), tf)
+    cv.paint(ball, STEEL)
+    for d in (-3, 0, 3):                                          # the grille
+        cv.paint(clip(Canvas.stroke_mask([(d - 4, -18), (d + 4, -10)], 0.7, tf), ball), STEEL_DARK, 0.8)
+        cv.paint(clip(Canvas.stroke_mask([(d + 4, -18), (d - 4, -10)], 0.7, tf), ball), STEEL_DARK, 0.8)
+    cv.paint(clip(Canvas.poly_mask(ellipse_pts(-2, -16.5, 1.8, 1.2), tf), ball), WHITE, 0.8)
+
+
+GUITAR_FRETS = (-16, -21, -26, -31, -36)
+
+
+def _prop_guitar(cv, pr, tf, body_tf, lb):
+    """Small acoustic guitar: the sound hole is the origin, the neck runs along -x to the headstock."""
+    body = Canvas.poly_mask(ellipse_pts(4, 0, 11, 9.5), tf)
+    Canvas.poly_mask(ellipse_pts(-8, 0, 8, 7.4), tf, body)
+    Canvas.poly_mask(ellipse_pts(-2, 0, 4, 6.2), tf, body)        # fills the waist smoothly
+    cv.paint(body, WOOD_DARK)
+    top = Canvas.poly_mask(ellipse_pts(4, 0, 9.6, 8.2), tf)
+    Canvas.poly_mask(ellipse_pts(-8, 0, 6.7, 6.1), tf, top)
+    Canvas.poly_mask(ellipse_pts(-2, 0, 4, 5), tf, top)
+    cv.paint(top, WOOD)
+    cv.paint(clip(Canvas.poly_mask(ellipse_pts(-6, -3.5, 5, 2), tf), top), WHITE, 0.35)
+    cv.paint(Canvas.poly_mask(ellipse_pts(-3, 0, 3.6, 3.6), tf), WOOD_DARK)
+    cv.paint(Canvas.poly_mask(ellipse_pts(-3, 0, 2.7, 2.7), tf), (70, 40, 24))
+    cv.paint(Canvas.poly_mask(_rect_pts(8, 0, 2.4, 8, 0, 1), tf), (92, 54, 30))      # bridge
+    cv.paint(Canvas.poly_mask(_rect_pts(-26, 0, 28, 4.4, 0, 1), tf), NECK_WOOD)
+    for fx in GUITAR_FRETS:
+        cv.paint(Canvas.stroke_mask([(fx, -2), (fx, 2)], 0.6, tf), (214, 196, 170), 0.9)
+    head = chaikin([(-40, -2.6), (-49, -4.2), (-49, 4.2), (-40, 2.6)], 1)
+    cv.paint(Canvas.poly_mask(head, tf), (96, 56, 32))
+    for px in (-43, -46.5):
+        for py in (-4.6, 4.6):
+            cv.paint(Canvas.poly_mask(ellipse_pts(px, py, 1.1, 1.1), tf), STEEL)
+    for sy in (-1.2, -0.4, 0.4, 1.2):
+        cv.paint(Canvas.stroke_mask([(8, sy), (-41, sy * 0.8)], 0.45, tf), STRING, 0.9)
+
+
 PROPS = {
     "wheel": _prop_wheel, "wrench": _prop_wrench, "map": _prop_map, "tire": _prop_tire,
     "belt": _prop_belt, "nozzle": _prop_nozzle, "hose": _prop_hose, "sponge": _prop_sponge,
-    "flag": _prop_flag,
+    "flag": _prop_flag, "mic": _prop_mic, "guitar": _prop_guitar,
 }
 
 
@@ -2861,6 +3141,248 @@ def parking(i, n):
     return p
 
 
+# ---- wave 4: heart, music shows, turning around
+# The fox turns about its vertical axis (pose `yaw`, see Turn) instead of being squeezed or mirrored, and
+# morphs into a heart (pose `heart`, see draw_heart_body). Every one starts and ends in the calm pose.
+
+# When the heart is complete in heart_transform (ms from the start); the app gives a short haptic tick then
+# (AnimationPools.HEART_MOMENT_MS in the app must match).
+HEART_MOMENT_MS = 2000
+
+
+def _mouth_at(p, pt):
+    """Body-space position of a head point (the head tilts and bobs on the neck)."""
+    x, y = Tf.rotate(p["head_tilt"], *NECK).apply([pt])[0]
+    return float(x), float(y) + p["head_dy"]
+
+
+def heart_transform(i, n):
+    """Closes its eyes, hugs itself and turns into a big orange-pink heart that beats, then opens back into the fox."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    full = HEART_MOMENT_MS / (n * FRAME_MS)
+    m = keys(t, [(0.2, 0.0), (full, 1.0), (0.72, 1.0), (0.9, 0.0)])
+    hug = window(t, 0.06, 0.2, 0.84, 0.95, ease_in_out)
+    beat = sum(a * bump(t, s, s + 0.06) for s, a in ((0.48, 1.0), (0.55, 0.7), (0.62, 1.0), (0.69, 0.7)))
+    p["heart"] = m
+    p["sx"] *= 1 + 0.06 * beat
+    p["sy"] *= 1 + 0.06 * beat
+    k = 1 - ramp(m, 0.1, 0.55)
+    if hug > 0.02 and k > 0.03:
+        arms = raised(paw(-1, (52, 93), hug), paw(1, (76, 93), hug)) or []
+        p["arm"] = [dict(a, k=k, x=lerp(64, a["x"], k), y=lerp(96, a["y"], k)) for a in arms] or None
+    p["head_tilt"] = 7 * window(t, 0.06, 0.16, 0.26, 0.4, ease_in_out) - 5 * window(t, 0.8, 0.86, 0.9, 0.97)
+    p["head_dy"] = 1.5 * hug * (1 - m)
+    shut = 0.07 < t < 0.88
+    p["eyes"] = "closed" if shut else ("happy" if 0.88 <= t < 0.95 else "open")
+    p["mouth"] = "smile" if 0.07 < t < 0.95 else "w"
+    p["blush"] = 0.5 + 0.45 * hug
+    p["ear_r"] = ear_flick(t, 0.93, amp=10)
+    p["tail"] = 4 * math.sin(2 * math.pi * t) + 10 * math.sin(2 * math.pi * t * 5) * window(t, 0.86, 0.9, 0.94, 0.99)
+    ex = []
+    for hx, hy, d, s_ in ((22, 52, 0.45, 0.7), (106, 40, 0.5, 0.8), (30, 26, 0.57, 0.6), (100, 74, 0.62, 0.65),
+                          (64, 30, 0.66, 0.6)):
+        f = _floating(t, "heart", hx, hy, rise=16, delay=d, life=0.2, size=s_, drift=2)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((24, 30, full - 0.02), (104, 22, full)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=4, delay=d, life=0.12, size=0.8, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def dance_side(i, n):
+    """Turns sideways and dances in profile: sways, steps from paw to paw, wags; glances back at you once, turns back."""
+    t = i / n
+    beat = (i % 15) / 15
+    p = default_pose()
+    breathe(p, t, 0.5)
+    turn = keys(t, [(0.03, 0.0), (0.15, 1.0), (0.85, 1.0), (0.97, 0.0)])
+    p["yaw"] = 72 * turn
+    dance = window(t, 0.13, 0.2, 0.8, 0.87)
+    pulse = math.exp(-beat * 6) * dance
+    step = math.sin(math.pi * beat) * dance
+    lead = 1 if (i // 15) % 2 == 0 else -1
+    p["feet_dy"] = (-4.5 * step if lead < 0 else 0.0, -4.5 * step if lead > 0 else 0.0)
+    sway = math.sin(2 * math.pi * i / 30) * dance
+    p["lean"] = 6 * sway
+    p["dx"] = 2 * sway
+    p["dy"] = -1.5 * step
+    p["sy"] *= 1 - 0.05 * pulse
+    p["sx"] *= 1 + 0.03 * pulse
+    glance = window(t, 0.44, 0.5, 0.6, 0.66, ease_in_out)
+    p["head_yaw"] = -66 * glance                       # looks at you over its shoulder
+    p["head_tilt"] = -4 * sway + 4 * glance
+    p["ear_l"] = 6 * sway
+    p["ear_r"] = 6 * sway
+    p["tail"] = 16 * math.sin(2 * math.pi * i / 15) * dance - 6 * turn
+    happy = dance > 0.4 and glance < 0.4
+    p["eyes"] = "happy" if happy else "open"
+    p["open"] = 1 - blink_shut(t, 0.55, "single", 0.04)
+    p["mouth"] = "open" if happy else ("smile" if glance > 0.4 else "w")
+    p["mouth_open"] = 0.5 + 0.4 * pulse
+    p["blush"] = 0.5 + 0.2 * dance
+    ex = [e for e in _notes(t, 3, 24, 14, -1, NOTE_COLORS) if dance > 0.05]
+    for e in ex:
+        e["opacity"] *= dance
+        e["y"] += 12
+    p["extras"] = ex
+    return p
+
+
+def microphone(i, n):
+    """Pulls out a microphone, sings into it with its eyes shut and swaying, a big gesture with the free paw, puts it away."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    hold = window(t, 0.03, 0.15, 0.82, 0.94, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.12, 0.83, 0.9)
+    sing = window(t, 0.2, 0.24, 0.76, 0.8)
+    sway = math.sin(2 * math.pi * (t - 0.2) * secs / 1.6) * sing
+    p["lean"] = 4 * sway
+    p["head_tilt"] = -6 * sway + 4 * sing
+    p["head_dy"] = 1.0 * sing
+    # the mic ball stays just below the mouth while the head sways; the paw holds the grip
+    rot = -28 + 6 * sway
+    mouth = _mouth_at(p, (66, 83))
+    r = math.radians(rot)
+    grip_sing = (mouth[0] + 4 - 16 * math.sin(r), mouth[1] + 5 + 16 * math.cos(r))
+    to_mouth = keys(t, [(0.12, 0.0), (0.22, 1.0), (0.78, 1.0), (0.86, 0.0)])
+    grip = (lerp(92, grip_sing[0], to_mouth), lerp(100, grip_sing[1], to_mouth))
+    hand = paw(1, grip, hold)
+    if s > 0.01:
+        p["props"] = [dict(kind="mic", x=hand["x"], y=hand["y"], rot=lerp(-8, rot, to_mouth), scale=1.15 * s)]
+    flourish = window(t, 0.62, 0.68, 0.74, 0.8, ease_in_out)
+    free = paw(-1, (20 + 3 * math.sin(2 * math.pi * t * 6), 54), flourish)
+    p["arm"] = raised(free, hand)
+    # syllables: a new mouth shape every 0.24 s
+    syl = int(max(0.0, t - 0.22) * secs / 0.24)
+    shapes = ("aa", "o", "ee", "aa", "open", "o", "aa", "ee")
+    ph = (max(0.0, t - 0.22) * secs / 0.24) % 1
+    if sing > 0.5:
+        p["mouth"] = shapes[syl % len(shapes)]
+        p["mouth_open"] = 0.45 + 0.55 * math.sin(math.pi * ph) + 0.3 * flourish
+    else:
+        p["mouth"] = "smile" if hold > 0.5 else "w"
+    p["eyes"] = "closed" if 0.3 < t < 0.6 else ("happy" if 0.6 <= t < 0.8 else "open")
+    p["open"] = 1 - blink_shut(t, 0.88, "single", 0.04)
+    p["ear_out"] = 4 * sing - 4 * flourish
+    p["ear_l"] = 5 * sway
+    p["ear_r"] = 5 * sway + ear_flick(t, 0.16, amp=8)
+    p["blush"] = 0.5 + 0.3 * sing
+    p["tail"] = 6 * math.sin(2 * math.pi * t * 3) * (0.4 + 0.6 * sing) + 8 * flourish
+    ex = [e for e in _notes(t * 2 % 1, 2, 98, 112, 1, NOTE_COLORS)] if sing > 0.05 else []
+    for e in ex:
+        e["opacity"] *= sing
+        e["y"] += 12
+    f = _floating(t, "sparkle", 18, 40, rise=6, delay=0.66, life=0.14, size=0.9, drift=0, rot=90 * t)
+    if f:
+        ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+GUITAR_AT = (67, 103)
+GUITAR_ROT = 26
+GUITAR_CHORDS = (-27, -32, -23, -29)
+
+
+def guitar(i, n):
+    """A small guitar appears; holds the neck with one paw and strums with the other, bobbing its head; a final chord, puts it away."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    hold = window(t, 0.04, 0.14, 0.84, 0.95, ease_in_out)
+    s = pop_in_out(t, 0.03, 0.1, 0.86, 0.93)
+    play = window(t, 0.16, 0.2, 0.7, 0.74)
+    final = window(t, 0.74, 0.77, 0.8, 0.85, ease_in_out)
+    lift = keys(t, [(0.06, 0.0), (0.16, 1.0), (0.84, 1.0), (0.92, 0.0)])
+    g_ = dict(kind="guitar", x=GUITAR_AT[0], y=lerp(106, GUITAR_AT[1], lift) - 1.5 * final,
+              rot=GUITAR_ROT + 4 * final, scale=1.15 * s)
+    if s > 0.01:
+        p["props"] = [g_]
+    # fretting paw moves between chord positions along the neck
+    ci = int(max(0.0, t - 0.16) * secs / 0.6)
+    cph = (max(0.0, t - 0.16) * secs / 0.6) % 1
+    fret = lerp(GUITAR_CHORDS[ci % 4], GUITAR_CHORDS[(ci + 1) % 4], smooth((cph - 0.82) / 0.18))
+    neck = prop_at(g_, (fret, 0.5))
+    strum = math.sin(2 * math.pi * (t - 0.16) * secs * 2.5) * play
+    body_pt = prop_at(g_, (4, -1.5 + 5 * strum - 9 * final))
+    up = window(t, 0.79, 0.81, 0.84, 0.88, ease_out)
+    strummer = (lerp(body_pt[0], 102, up), lerp(body_pt[1], 66, up))
+    p["arm"] = raised(paw(-1, neck, hold), paw(1, strummer, hold))
+    beat = (i % 10) / 10
+    bob = math.exp(-beat * 5) * play
+    p["head_dy"] = 1.5 * bob
+    p["head_tilt"] = 5 * math.sin(2 * math.pi * (t - 0.16) * secs / 1.6) * play - 6 * final
+    p["lean"] = -3 * final
+    shut = (0.3 < t < 0.48) or (0.58 < t < 0.68)
+    p["eyes"] = "closed" if shut else ("happy" if final > 0.3 else "open")
+    p["look"] = (-0.4 * hold * (1 - play), 0.9 * hold * (1 - final))
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.04)
+    p["mouth"] = "open" if final > 0.3 else ("smile" if play > 0.3 else "w")
+    p["mouth_open"] = 0.9
+    p["ear_out"] = 3 * play - 6 * final
+    p["ear_l"] = 4 * bob
+    p["ear_r"] = 4 * bob
+    p["blush"] = 0.5 + 0.25 * play + 0.2 * final
+    p["tail"] = 5 * math.sin(2 * math.pi * t * 4) * (0.3 + 0.7 * play) + 10 * final
+    ex = []
+    for d, x0, col in ((0.24, 104, NOTE_COLORS[0]), (0.4, 110, NOTE_COLORS[1]), (0.56, 102, NOTE_COLORS[2])):
+        f = _floating(t, "note", x0, 50, rise=30, delay=d, life=0.22, size=0.85, drift=3, color=col)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((108, 50, 0.79), (96, 30, 0.81), (116, 70, 0.83)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=5, delay=d, life=0.12, size=1.0, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def tail_back(i, n):
+    """Gets up, turns around to show its back and wags its big fluffy tail, peeks over the shoulder, turns back and sits."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    up = window(t, 0.02, 0.1, 0.88, 0.97, ease_in_out)
+    p["sy"] *= 1 + 0.05 * up
+    p["sx"] *= 1 - 0.03 * up
+    p["dy"] = -2.5 * up
+    yaw = keys(t, [(0.07, 0.0), (0.3, 180.0), (0.74, 180.0), (0.95, 360.0)])
+    p["yaw"] = yaw % 360
+    turning = bump(t, 0.07, 0.3) + bump(t, 0.74, 0.95)
+    p["feet_dy"] = (-2.5 * abs(math.sin(2 * math.pi * t * secs * 1.6)) * turning, -2.5 * abs(math.cos(2 * math.pi * t * secs * 1.6)) * turning)
+    wag = window(t, 0.32, 0.37, 0.68, 0.73)
+    back = window(t, 0.2, 0.28, 0.76, 0.84)
+    # seen from behind the tail points up-left; +28° brings it upright, then it swishes side to side
+    p["tail"] = 28 * back + 30 * math.sin(2 * math.pi * (t - 0.32) * secs * 1.4) * wag - 8 * turning
+    p["tail_curl"] = 0.3 * wag
+    peek = window(t, 0.47, 0.52, 0.6, 0.65, ease_in_out)
+    p["head_yaw"] = -78 * peek                         # looks back over the shoulder
+    p["head_tilt"] = 5 * peek
+    p["lean"] = 3 * math.sin(2 * math.pi * (t - 0.32) * secs * 1.4) * wag
+    p["ear_l"] = ear_flick(t, 0.4, amp=10) + 6 * wag * math.sin(2 * math.pi * t * 7)
+    p["ear_r"] = ear_flick(t, 0.44, amp=10)
+    p["eyes"] = "happy" if peek > 0.5 else "open"
+    p["open"] = 1 - blink_shut(t, 0.06, "single", 0.04)
+    p["mouth"] = "smile" if peek > 0.5 or t > 0.9 else "w"
+    p["blush"] = 0.5 + 0.2 * peek
+    ex = []
+    for sx_, sy_, d in ((22, 40, 0.4), (104, 34, 0.5), (26, 70, 0.6)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=5, delay=d, life=0.12, size=0.7, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
 EMOTIONS = {
     # file suffix: (pose function, frame count)
     "idle_small": (idle_small, 60),
@@ -2924,6 +3446,12 @@ EMOTIONS = {
     "arrival": (arrival, 100),
     "pothole": (pothole, 60),
     "parking": (parking, 150),
+    # wave 4
+    "heart_transform": (heart_transform, 115),
+    "dance_side": (dance_side, 125),
+    "microphone": (microphone, 130),
+    "guitar": (guitar, 140),
+    "tail_back": (tail_back, 140),
 }
 
 
@@ -2976,6 +3504,9 @@ WAVE3 = ["tail_hide", "grooming", "butterfly", "curl_up", "sleep_curled", "wake_
 CAR = ["driving", "seatbelt", "navigator", "mechanic", "tire_check", "refuel", "car_wash",
        "arrival", "pothole", "parking"]
 
+# Wave 4: the heart, music shows, turning around (shown first in the gallery, checked by test_generate.py).
+WAVE4 = ["heart_transform", "dance_side", "microphone", "guitar", "tail_back"]
+
 # Where each animation is used (see AnimationPools in the app); shown in the gallery.
 USAGE = {
     "driving": "AUTO · CALM while driving", "seatbelt": "AUTO · TRIP_PREPARE",
@@ -2988,6 +3519,8 @@ USAGE = {
     "tease": "TAP", "paw_wave": "TAP", "proud": "TAP, HEARTS",
     "curl_up": "FALL_ASLEEP → sleep_curled", "sleep_curled": "SLEEP after curl_up",
     "wake_curled": "WAKE after sleep_curled",
+    "heart_transform": "HEARTS after petting, FAREWELL", "dance_side": "MUSIC",
+    "microphone": "MUSIC · rare scene", "guitar": "MUSIC · rare scene", "tail_back": "CALM · scene, not while driving",
 }
 
 EDGE_ALPHA_MAX = 8       # opacity allowed in the outermost pixel row/column (anti-aliasing only)
@@ -3025,7 +3558,7 @@ def write_gallery(path, names):
         fn, n = EMOTIONS[name]
         f = os.path.join(OUT_DIR, f"fox_{name}.webp")
         kb = os.path.getsize(f) // 1024 if os.path.exists(f) else 0
-        group = "car" if name in CAR else ("wave3" if name in WAVE3 else "")
+        group = "wave4" if name in WAVE4 else ("car" if name in CAR else ("wave3" if name in WAVE3 else ""))
         cards.append(dict(name=name, src=f"{rel}/fox_{name}.webp", frames=n, ms=n * FRAME_MS, kb=kb,
                           desc=describe(name), use=USAGE.get(name, ""), group=group))
     import json
@@ -3057,7 +3590,7 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 </style></head><body>
 <header><h1>Лисёнок — анимации</h1>
 <div class="meta">Animated WebP прямо из <code>app/src/main/res/raw</code>. Нажмите на карточку, чтобы посмотреть отдельно.</div>
-<div class="bar" id="filters"><button data-f="car" aria-pressed="true">Автомобиль</button><button data-f="wave3" aria-pressed="false">Волна 3</button><button data-f="all" aria-pressed="false">Все</button>
+<div class="bar" id="filters"><button data-f="wave4" aria-pressed="true">Волна 4</button><button data-f="car" aria-pressed="false">Автомобиль</button><button data-f="wave3" aria-pressed="false">Волна 3</button><button data-f="all" aria-pressed="false">Все</button>
 <span style="flex:1"></span><button data-bg="" aria-pressed="true">Светлый фон</button><button data-bg="dark" aria-pressed="false">Тёмный</button><button data-bg="checker" aria-pressed="false">Прозрачность</button></div>
 </header>
 <main id="grid"></main>
@@ -3066,7 +3599,7 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 <div class="row"><button id="replay">↻ Сначала</button><button id="prev">← Пред.</button><button id="next">След. →</button><span style="flex:1"></span><button id="close">Закрыть</button></div></dialog>
 <script>
 const CARDS = __CARDS__;
-let filter = "car", bg = "", shown = [], cur = 0;
+let filter = "wave4", bg = "", shown = [], cur = 0;
 const grid = document.getElementById("grid"), dlg = document.getElementById("dlg");
 function render() {
   shown = CARDS.filter(c => filter === "all" || c.group === filter);
@@ -3074,7 +3607,7 @@ function render() {
   shown.forEach((c, k) => {
     const b = document.createElement("button"); b.className = "card";
     b.innerHTML = `<div class="stage ${bg}"><img loading="lazy" src="${c.src}" alt="${c.name}"></div>
-      <div class="name">${c.name}${c.group === "car" ? '<span class="badge">new</span>' : ""}</div>
+      <div class="name">${c.name}${c.group === "wave4" ? '<span class="badge">new</span>' : ""}</div>
       <div class="meta">${c.use || "&nbsp;"}</div><div class="meta">${(c.ms / 1000).toFixed(1)} с · ${c.frames} кадров · ${c.kb} KB</div>`;
     b.onclick = () => open(k); grid.appendChild(b);
   });
@@ -3122,6 +3655,8 @@ def main():
         only += WAVE3
     if "--car" in args:
         only += CAR
+    if "--wave4" in args:
+        only += WAVE4
     all_frames = {}
     for name, (fn, n) in EMOTIONS.items():
         if only and name not in only:
@@ -3141,7 +3676,7 @@ def main():
         os.makedirs(preview_dir, exist_ok=True)
         save_preview(all_frames, preview_dir)
     if gallery:
-        names = CAR + WAVE3 + [k for k in EMOTIONS if k not in WAVE3 and k not in CAR]
+        names = WAVE4 + CAR + WAVE3 + [k for k in EMOTIONS if k not in WAVE3 and k not in CAR and k not in WAVE4]
         write_gallery(gallery, names)
         print(f"gallery: {gallery}")
 

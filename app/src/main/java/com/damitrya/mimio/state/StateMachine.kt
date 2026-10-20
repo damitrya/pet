@@ -34,6 +34,8 @@ import kotlin.random.Random
  *
  * The car trip (PARKED → PREPARING → DRIVING → ARRIVED) is followed by [TripTracker]: getting into the
  * car plays TRIP_PREPARE, the end of a long trip ARRIVAL; both end at once when the car starts moving.
+ *
+ * Hiding by the user plays FAREWELL first ([startFarewell]); any other state that takes over ends it early.
  */
 class StateMachine(
     private val settings: SettingsRepository,
@@ -166,6 +168,12 @@ class StateMachine(
 
     private val blinkRunnable = Runnable { triggerBlink() }
 
+    /** Hides the overlay once FAREWELL is over (null: no farewell running). Called at most once. */
+    private var farewellDone: (() -> Unit)? = null
+
+    /** The farewell never takes longer than [FAREWELL_TIMEOUT_MS], even if its end is never reported. */
+    private val farewellTimeout = Runnable { endFarewell() }
+
     /** One-shot that never reported its end (e.g. the overlay was hidden meanwhile). */
     private var watchedOneShot: CompanionState? = null
     private val oneShotWatchdog = Runnable {
@@ -282,6 +290,7 @@ class StateMachine(
                 alertCooldownUntil = clock() + ALERT_COOLDOWN_MS
                 transitionTo(CompanionState.RELIEF)
             }
+            CompanionState.FAREWELL -> endFarewell()
             CompanionState.FALL_ASLEEP -> {
                 // Music or a call started while dozing off: wake up (from the pose it dozed off in),
                 // then WAKE returns to MUSIC / PHONE_CALL.
@@ -328,6 +337,7 @@ class StateMachine(
     fun onLongPress() {
         if (alertActive) return
         if (petActive) return
+        if (farewellDone != null) return      // already saying goodbye
 
         petActive = true
         tapQueued = false
@@ -371,7 +381,7 @@ class StateMachine(
      * - Another one-shot is active (BLINK, GREETING, HEARTS…) → queue TAP.
      */
     fun onTap() {
-        if (alertActive || petActive) return
+        if (alertActive || petActive || farewellDone != null) return
 
         val now = clock()
         val previousTap = recentTaps.lastOrNull()
@@ -411,8 +421,50 @@ class StateMachine(
     /** True while ALERT or PET plays: a profile switch now would cut it short. */
     fun isBusy(): Boolean = alertActive || petActive
 
+    /**
+     * The user hides the character: it turns into a heart (FAREWELL) and [onDone] hides the overlay when
+     * that is over — at the latest after [FAREWELL_TIMEOUT_MS]. Returns false, and plays nothing, during a
+     * critical reaction (braking, a sharp turn) or while asleep: the caller then hides at once.
+     * Any other state taking over (braking, a profile switch…) ends the farewell early and hides.
+     */
+    fun startFarewell(onDone: () -> Unit): Boolean {
+        if (farewellDone != null) return true
+        if (alertActive || currentState in NO_FAREWELL) return false
+        petActive = false
+        tapQueued = false
+        rememberBaseState()
+        farewellDone = onDone
+        transitionTo(CompanionState.FAREWELL)
+        scheduler.postDelayed(farewellTimeout, FAREWELL_TIMEOUT_MS)
+        return true
+    }
+
+    fun isFarewellRunning(): Boolean = farewellDone != null
+
+    /** Forgets a running farewell without hiding (shown again, hidden at once, or the service stops). */
+    fun cancelFarewell() {
+        farewellDone = null
+        scheduler.cancel(farewellTimeout)
+    }
+
+    /** Hides (once) and lets the character rest in its ambient state behind the hidden overlay. */
+    private fun endFarewell() {
+        finishFarewell()
+        if (currentState == CompanionState.FAREWELL) {
+            tapQueued = false
+            transitionTo(ambientState())
+        }
+    }
+
+    private fun finishFarewell() {
+        val done = farewellDone ?: return
+        cancelFarewell()
+        done()
+    }
+
     fun destroy() {
         cancelBlinkTimer()
+        cancelFarewell()
         scheduler.cancel(oneShotWatchdog)
     }
 
@@ -497,7 +549,7 @@ class StateMachine(
             // Car scenes for a standing car: buckling up, the flag, parking are over once it moves.
             CompanionState.TRIP_PREPARE, CompanionState.ARRIVAL -> returnToBaseState()
             CompanionState.FIDGET -> if (distractingScene()) returnToBaseState()
-            CompanionState.CALM -> if (distractingScene()) onSceneCut()
+            CompanionState.CALM, CompanionState.MUSIC -> if (distractingScene()) onSceneCut()
             else -> {}
         }
     }
@@ -692,6 +744,8 @@ class StateMachine(
 
     private fun transitionTo(newState: CompanionState) {
         val previous = currentState
+        // Something else took over the farewell (braking, a profile switch…): hide now, before it shows.
+        if (previous == CompanionState.FAREWELL && newState != CompanionState.FAREWELL) finishFarewell()
 
         // If a one-shot was cut short by a looping state, the queued tap is stale.
         if (!previous.isLooping && newState.isLooping) {
@@ -731,6 +785,12 @@ class StateMachine(
      * (once), then doze off. Neither happens while the car is moving.
      */
     private fun triggerBlink() {
+        if (currentState == CompanionState.MUSIC && idleBusy()) {
+            // A show (guitar, microphone) is on: the dance break waits until it is over.
+            scheduler.cancel(blinkRunnable)
+            scheduler.postDelayed(blinkRunnable, SCENE_RETRY_MS)
+            return
+        }
         if (currentState == CompanionState.MUSIC) {
             // Music never ends in the car — break up the dancing with other idle reactions.
             transitionTo(CompanionState.FIDGET)
@@ -776,6 +836,15 @@ class StateMachine(
 
         /** A one-shot that has not finished after this long is ended by force (no stuck states). */
         const val ONE_SHOT_TIMEOUT_MS = 15_000L
+
+        /** The overlay is hidden at the latest this long after the farewell began (the heart takes ≈4.6 s). */
+        const val FAREWELL_TIMEOUT_MS = 6_000L
+
+        /** No farewell during critical car reactions or while asleep: hiding is immediate then. */
+        private val NO_FAREWELL = setOf(
+            CompanionState.ALERT, CompanionState.TURN_LEFT, CompanionState.TURN_RIGHT,
+            CompanionState.SLEEP, CompanionState.FALL_ASLEEP
+        )
 
         /**
          * A stop shorter than this still counts as driving for the choice of animations (no scenes);

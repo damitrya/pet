@@ -9,6 +9,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -45,6 +46,17 @@ class OverlayManager(
      */
     var onLongPressReleasedListener: (() -> Unit)? = null
 
+    /** Ticks for the user's touches (tap, long press, the heart); off in the settings → silent. */
+    private val haptics = TouchHaptics({ settings.hapticsEnabled }) { effect ->
+        overlayView?.performHapticFeedback(
+            when (effect) {
+                TouchHaptics.Effect.TAP -> HapticFeedbackConstants.KEYBOARD_TAP
+                TouchHaptics.Effect.HOLD -> HapticFeedbackConstants.LONG_PRESS
+                TouchHaptics.Effect.HEART -> HapticFeedbackConstants.CLOCK_TICK
+            }
+        ) ?: false
+    }
+
     fun getCharacterView(): CharacterView? = characterView
     fun getWeatherOverlayView(): WeatherOverlayView? = weatherOverlayView
 
@@ -72,6 +84,7 @@ class OverlayManager(
 
         overlayView = LayoutInflater.from(context).inflate(R.layout.overlay_character, null)
         characterView = overlayView?.findViewById(R.id.character_view)
+        characterView?.haptics = haptics
         weatherOverlayView = overlayView?.findViewById(R.id.weather_overlay_view)
 
         // Apply opacity
@@ -124,6 +137,7 @@ class OverlayManager(
         val longPressHandler = Handler(Looper.getMainLooper())
         val longPressRunnable = Runnable {
             isLongPressActive = true
+            haptics.play(TouchHaptics.Effect.HOLD)
             onLongPressListener?.invoke()
         }
 
@@ -170,6 +184,7 @@ class OverlayManager(
                         settings.overlayY = layoutParams?.y ?: 0
                     } else if (!wasLongPress) {
                         // Short tap → trigger TAP animation
+                        haptics.play(TouchHaptics.Effect.TAP)
                         onTapListener?.invoke()
                     }
                     true

@@ -126,6 +126,15 @@ object AnimationPools {
      */
     val PREVIEW_ONLY = setOf("pothole")
 
+    /** The fox turns into a heart: a petting finale and the farewell when the user hides it. */
+    const val HEART_TRANSFORM = "heart_transform"
+
+    /**
+     * When the heart is complete in fox_heart_transform.webp (ms from its start): the moment of the short
+     * haptic tick. Must match HEART_MOMENT_MS in tools/fox/generate.py (checked by its tests).
+     */
+    const val HEART_MOMENT_MS = 2000L
+
     private val CAR_SCENE = setOf(AnimTag.CAR, AnimTag.SCENE, AnimTag.PARKED_ONLY)
     private val CAR_CARE = CAR_SCENE + AnimTag.MAINTENANCE
 
@@ -161,6 +170,9 @@ object AnimationPools {
                 AnimationVariant("listen", weight = 6, cooldown = 4, tags = setOf(AnimTag.EXPLORE)),
                 AnimationVariant("confused", weight = 3, cooldown = 6, minGapMs = MINUTE,
                     tags = setOf(AnimTag.EXPLORE)),
+                // Wave 4: turns its back and wags the tail. A scene: never while the car moves.
+                AnimationVariant("tail_back", weight = 3, cooldown = 10, minGapMs = 5 * MINUTE,
+                    tags = setOf(AnimTag.SCENE, AnimTag.FRIENDLY)),
                 // Car companion (AUTO profile). Driving: short and calm, never a scene.
                 AnimationVariant("driving", weight = 6, cooldown = 3, minGapMs = 45_000L,
                     tags = setOf(AnimTag.CAR, AnimTag.DRIVING)),
@@ -180,7 +192,13 @@ object AnimationPools {
                 AnimationVariant("music2", weight = 28),
                 AnimationVariant("music_nod", weight = 20, cooldown = 1),
                 AnimationVariant("music_paws", weight = 14, cooldown = 1),
-                AnimationVariant("music_spin", weight = 6, cooldown = 6, tags = setOf(AnimTag.ACTIVE))
+                AnimationVariant("music_spin", weight = 6, cooldown = 6, tags = setOf(AnimTag.ACTIVE)),
+                // Wave 4. The side dance moves a lot (ACTIVE: not while driving); the guitar and the microphone
+                // are rare shows (SCENE: spaced apart, not while driving) so the usual dances stay the norm.
+                AnimationVariant("dance_side", weight = 10, cooldown = 3, minGapMs = MINUTE, tags = setOf(AnimTag.ACTIVE)),
+                AnimationVariant("microphone", weight = 4, cooldown = 8, minGapMs = 4 * MINUTE,
+                    tags = setOf(AnimTag.SCENE, AnimTag.FRIENDLY)),
+                AnimationVariant("guitar", weight = 4, cooldown = 8, minGapMs = 4 * MINUTE, tags = setOf(AnimTag.SCENE))
             ),
             CompanionState.TAP to pool(
                 AnimationVariant("tap", weight = 45),
@@ -197,9 +215,14 @@ object AnimationPools {
             // that do not have the new animation yet (the slime).
             CompanionState.ANNOYED to single("annoyed", fallback = "blink"),
             CompanionState.HEARTS to pool(
-                AnimationVariant("hearts", weight = 80, fallback = "pet"),
-                AnimationVariant("proud", weight = 20, cooldown = 2, tags = setOf(AnimTag.FRIENDLY))
+                AnimationVariant("hearts", weight = 60, fallback = "pet"),
+                AnimationVariant("proud", weight = 15, cooldown = 2, tags = setOf(AnimTag.FRIENDLY)),
+                // Turns into a heart: not after every petting (minGap), never twice in a row (cooldown).
+                AnimationVariant(HEART_TRANSFORM, weight = 25, cooldown = 2, minGapMs = 2 * MINUTE,
+                    tags = setOf(AnimTag.FRIENDLY))
             ),
+            // The slime has no heart: it waves goodbye with its petting animation.
+            CompanionState.FAREWELL to single(HEART_TRANSFORM, fallback = "pet"),
             CompanionState.RELIEF to single("relief", fallback = "blink"),
             CompanionState.GREETING to single("greeting", fallback = "tap"),
             CompanionState.TRIP_START to single("trip_start", fallback = "tap"),

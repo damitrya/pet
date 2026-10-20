@@ -7,7 +7,9 @@ Checks for the fox generator: python3 -m unittest discover -s tools/fox
 - the curled-up sleep sequence joins up (curl_up → sleep_curled loop → wake_curled → calm);
 - rendering is deterministic (no randomly changing details between runs);
 - car animations: inside the frame, start/end in the calm pose (props pop in and out), the props
-  follow the paws and are not cut off, and the transparent background stays transparent.
+  follow the paws and are not cut off, and the transparent background stays transparent;
+- wave 4: inside the frame, calm at both ends, the turn and the heart change the drawing itself (no
+  squeezing or mirroring), the front view is unchanged by the new pose fields, the props follow the paws.
 """
 
 import os
@@ -143,6 +145,108 @@ class FoxGeneratorTest(unittest.TestCase):
 
     def test_car_animations_are_described_for_the_gallery(self):
         for name in g.CAR:
+            self.assertTrue(g.describe(name), name)
+            self.assertIn(name, g.USAGE)
+
+    # ---- wave 4
+
+    def test_wave4_stays_inside_the_frame(self):
+        for name in g.WAVE4:
+            n = g.EMOTIONS[name][1]
+            frames = [frame(name, i) for i in range(0, n, 2)]
+            self.assertEqual([], g.edge_problems(frames), name)
+
+    def test_wave4_starts_and_ends_calm(self):
+        for name in g.WAVE4:
+            n = g.EMOTIONS[name][1]
+            self.assertLess(diff(frame(name, 0), self.calm), SAME_POSE, f"{name} start")
+            self.assertLess(diff(frame(name, n - 1), self.calm), SAME_POSE, f"{name} end")
+
+    def test_wave4_moves_smoothly(self):
+        # No jumps of the head, paws, tail or props between neighbouring frames.
+        for name in g.WAVE4:
+            n = g.EMOTIONS[name][1]
+            frames = [frame(name, i) for i in range(n)]
+            worst = max(diff(a, b) for a, b in zip(frames, frames[1:]))
+            self.assertLess(worst, 9.0, name)
+
+    def test_wave4_keeps_a_transparent_background(self):
+        for name in g.WAVE4:
+            n = g.EMOTIONS[name][1]
+            a = np.asarray(frame(name, n // 2).getchannel("A"))
+            self.assertGreater((a == 0).mean(), 0.35, name)
+            self.assertEqual(0, a[:4, :4].max(), name)
+
+    def test_new_pose_fields_keep_the_front_view(self):
+        # yaw = 0 and heart = 0 draw exactly what the original code drew.
+        p = g.default_pose()
+        plain = g.draw_character(p).tobytes()
+        p.update(yaw=0.0, head_yaw=0.0, heart=0.0, tail_scale=1.0, feet_dy=(0.0, 0.0))
+        self.assertEqual(plain, g.draw_character(p).tobytes())
+
+    def test_turning_is_drawn_not_squeezed(self):
+        # A squeezed front view keeps both eyes; the real profile hides the far eye and shows the snout
+        # beyond the head, and the back view has no face at all.
+        def dark_pixels(p):
+            img = np.asarray(g.draw_character(p).resize((128, 128)))
+            return ((img[..., 0] < 80) & (img[..., 1] < 50) & (img[..., 3] > 200)).sum()
+        front, side, back = g.default_pose(), g.default_pose(), g.default_pose()
+        side["yaw"], back["yaw"] = 90.0, 180.0
+        self.assertLess(dark_pixels(back), dark_pixels(side))
+        self.assertLess(dark_pixels(side), dark_pixels(front))
+        a_side = np.asarray(g.draw_character(side).getchannel("A")) > 128
+        a_front = np.asarray(g.draw_character(front).getchannel("A")) > 128
+        # the profile is not the front view squashed: its outline is not symmetric
+        self.assertNotEqual(a_side.tolist(), a_side[:, ::-1].tolist())
+        self.assertGreater(abs(int(a_front.sum()) - int(a_side.sum())), 0)
+
+    def test_heart_transform_really_morphs(self):
+        # The silhouette goes through shapes between fox and heart (no fade of one picture into another),
+        # and the face stays on it.
+        fn, n = g.EMOTIONS["heart_transform"]
+        full = round(g.HEART_MOMENT_MS / g.FRAME_MS)
+        self.assertAlmostEqual(1.0, fn(full, n)["heart"], places=2)
+        heart = np.asarray(frame("heart_transform", full).getchannel("A")) > 128
+        fox = np.asarray(self.calm.getchannel("A")) > 128
+        mid_i = next(i for i in range(n) if 0.4 < fn(i, n)["heart"] < 0.6)
+        mid = np.asarray(frame("heart_transform", mid_i).getchannel("A")) > 128
+        self.assertGreater((mid != fox).sum(), 0)
+        self.assertGreater((mid != heart).sum(), 0)
+        # every frame stays opaque inside (no translucent cross-fade)
+        for i in range(0, n, 6):
+            a = np.asarray(frame("heart_transform", i).getchannel("A"))
+            self.assertLess(((a > 30) & (a < 200)).mean(), 0.08, f"frame {i}")
+        self.assertEqual("closed", fn(full, n)["eyes"])
+
+    def test_heart_moment_matches_the_app(self):
+        kt = os.path.join(os.path.dirname(__file__), "..", "..", "app", "src", "main", "java", "com", "damitrya",
+                          "mimio", "state", "AnimationPool.kt")
+        with open(kt, encoding="utf-8") as fh:
+            self.assertIn(f"HEART_MOMENT_MS = {g.HEART_MOMENT_MS}L", fh.read())
+
+    def test_music_props_move_with_the_paws(self):
+        for name, kind, side in (("microphone", "mic", 1), ("guitar", "guitar", -1)):
+            fn, n = g.EMOTIONS[name]
+            seen = []
+            for i in range(0, n, 4):
+                p = fn(i, n)
+                props = [pr for pr in p["props"] if pr["kind"] == kind and pr.get("scale", 1) > 0.3]
+                if not props or (kind == "guitar" and not 0.2 < i / n < 0.7):   # held, not being picked up
+                    continue
+                pr = props[0]
+                arms = p["arm"] if isinstance(p["arm"], list) else [p["arm"]]
+                hand = next(a for a in arms if a and a["side"] == side)
+                if kind == "mic":
+                    self.assertLess(abs(hand["x"] - pr["x"]) + abs(hand["y"] - pr["y"]), 0.01, f"{name} {i}")
+                else:   # the fretting paw stays on the neck (local y ≈ 0, between body and headstock)
+                    inv = np.linalg.inv(g._local(pr).m)
+                    lx, ly, _ = inv @ np.array([hand["x"], hand["y"], 1.0])
+                    self.assertTrue(-40 < lx < -14 and abs(ly) < 1.5, f"{name} {i}: {lx:.1f}, {ly:.1f}")
+                seen.append((round(pr["x"]), round(pr["y"])))
+            self.assertGreater(len(set(seen)), 3, f"{name}: the prop moves")
+
+    def test_wave4_is_described_for_the_gallery(self):
+        for name in g.WAVE4:
             self.assertTrue(g.describe(name), name)
             self.assertIn(name, g.USAGE)
 

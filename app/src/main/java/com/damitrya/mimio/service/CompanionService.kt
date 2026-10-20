@@ -195,30 +195,19 @@ class CompanionService : Service(),
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_HIDE -> {
-                mood.flush()
-                overlayManager.hide()
-                updateNotification(isVisible = false)
+                hideWithFarewell()
                 return START_STICKY
             }
             ACTION_SHOW -> {
-                overlayManager.show()
-                setInitialState()
-                updateNotification(isVisible = true)
+                showOverlay()
                 return START_STICKY
             }
             ACTION_TOGGLE -> {
-                if (overlayManager.isVisible()) {
-                    mood.flush()
-                    overlayManager.hide()
-                    updateNotification(isVisible = false)
-                } else {
-                    overlayManager.show()
-                    setInitialState()
-                    updateNotification(isVisible = true)
-                }
+                if (overlayManager.isVisible()) hideWithFarewell() else showOverlay()
                 return START_STICKY
             }
             ACTION_STOP -> {
+                // Stopping is immediate: no farewell holds the service (or its notification) back.
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -433,6 +422,30 @@ class CompanionService : Service(),
 
     override fun onWeatherModifierChanged(modifier: WeatherModifier) {
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(modifier)
+    }
+
+    /**
+     * "Hide" by the user: the fox turns into a heart (FAREWELL), then the overlay goes away — when the
+     * animation ends or after the state machine's safety timeout. Pressed again meanwhile, or nothing can
+     * play (braking, a sharp turn, asleep): hidden at once.
+     */
+    private fun hideWithFarewell() {
+        if (!overlayManager.isVisible()) return
+        if (stateMachine.isFarewellRunning() || !stateMachine.startFarewell { hideOverlay() }) hideOverlay()
+    }
+
+    private fun hideOverlay() {
+        stateMachine.cancelFarewell()
+        mood.flush()
+        overlayManager.hide()
+        updateNotification(isVisible = false)
+    }
+
+    private fun showOverlay() {
+        stateMachine.cancelFarewell()      // "Show" during the farewell: the fox stays
+        overlayManager.show()
+        setInitialState()
+        updateNotification(isVisible = true)
     }
 
     private fun setInitialState() {

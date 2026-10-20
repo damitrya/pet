@@ -141,6 +141,11 @@ class SettingsActivity : AppCompatActivity() {
             settings.sensorReactionEnabled = isChecked
         }
 
+        binding.switchHaptics.isChecked = settings.hapticsEnabled
+        binding.switchHaptics.setOnCheckedChangeListener { _, isChecked ->
+            settings.hapticsEnabled = isChecked
+        }
+
         binding.switchAutoStart.isChecked = settings.autoStartEnabled
         binding.switchAutoStart.setOnCheckedChangeListener { _, isChecked ->
             settings.autoStartEnabled = isChecked

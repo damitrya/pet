@@ -27,6 +27,7 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         const val KEY_SENSOR_REACTION = "sensor_reaction_enabled"
         const val KEY_AUTO_START = "auto_start_enabled"
         const val KEY_SERVICE_ENABLED = "service_enabled"
+        const val KEY_HAPTICS = "haptics_enabled"
 
         // Profile
         const val KEY_ACTIVE_PROFILE = "active_profile"
@@ -130,6 +131,11 @@ class SettingsRepository(private val prefs: SharedPreferences) {
     var autoStartEnabled: Boolean
         get() = prefs.getBoolean(KEY_AUTO_START, false)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
+
+    /** Short haptic ticks on the user's own taps and long presses (never on automatic reactions). */
+    var hapticsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_HAPTICS, true)
+        set(value) = prefs.edit().putBoolean(KEY_HAPTICS, value).apply()
 
     var serviceEnabled: Boolean
         get() = prefs.getBoolean(KEY_SERVICE_ENABLED, false)

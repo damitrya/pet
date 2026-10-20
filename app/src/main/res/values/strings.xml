@@ -52,6 +52,7 @@
     <!-- Behavior -->
     <string name="label_music_reaction">Реакция на музыку</string>
     <string name="label_sensor_reaction">Реакция на торможение и повороты</string>
+    <string name="label_haptics">Тактильная отдача</string>
     <string name="label_auto_start">Автозапуск при включении</string>
 
     <!-- Profile -->
