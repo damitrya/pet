@@ -19,9 +19,8 @@
     <!-- Notification posting (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Media state detection (optional) -->
-    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL"
-        tools:ignore="ProtectedPermissions" />
+    <!-- Media state: active sessions come through the notification listener below (user-granted
+         notification access), with AudioManager as the fallback. No privileged permission needed. -->
 
     <!-- Step counter / activity recognition (Android 10+, optional) -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
