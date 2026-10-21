@@ -8,11 +8,14 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.damitrya.mimio.R
 import com.damitrya.mimio.data.AppProfile
@@ -43,6 +46,7 @@ import com.damitrya.mimio.data.WeatherData
 import com.damitrya.mimio.data.WeatherDataProvider
 import com.damitrya.mimio.overlay.OverlayManager
 import com.damitrya.mimio.state.AnimationDirector
+import com.damitrya.mimio.state.BatteryWatcher
 import com.damitrya.mimio.state.CharacterMood
 import com.damitrya.mimio.state.CompanionState
 import com.damitrya.mimio.state.FarewellFlow
@@ -74,6 +78,17 @@ class CompanionService : Service(),
         const val ACTION_STOP = "com.damitrya.mimio.ACTION_STOP"
         const val ACTION_SWITCH_PROFILE = "com.damitrya.mimio.ACTION_SWITCH_PROFILE"
 
+        /** Debug tools: play one animation now ([EXTRA_ANIMATION] = raw name without "fox_"). */
+        const val ACTION_PREVIEW = "com.damitrya.mimio.ACTION_PREVIEW"
+        const val EXTRA_ANIMATION = "animation"
+
+        /** One-off notice after stopping at 1 % (not the foreground notification). */
+        const val LOW_BATTERY_NOTIFICATION_ID = 1002
+
+        /** Logcat tags: why the heart was (not) chosen, and the state machine's battery / petting decisions. */
+        private const val HEART_TAG = "MimioHeart"
+        private const val STATE_TAG = "MimioState"
+
         /** Retry interval while ALERT/PET postpones a profile switch. */
         private const val BUSY_RETRY_MS = 2000L
 
@@ -88,6 +103,13 @@ class CompanionService : Service(),
 
         fun stop(context: Context) {
             context.stopService(Intent(context, CompanionService::class.java))
+        }
+
+        /** Plays [animation] on the running overlay (settings → debug tools). */
+        fun preview(context: Context, animation: String) {
+            context.startService(
+                Intent(context, CompanionService::class.java).setAction(ACTION_PREVIEW).putExtra(EXTRA_ANIMATION, animation)
+            )
         }
     }
 
@@ -156,7 +178,9 @@ class CompanionService : Service(),
         mediaProvider = MediaStateProvider(this)
         mood = CharacterMood(PrefsMoodStore(this))
         stateMachine = StateMachine(settings, mood = mood)
-        director = AnimationDirector(mood, context = { stateMachine.playContext() })
+        director = AnimationDirector(mood, context = { stateMachine.playContext() }, log = { Log.i(HEART_TAG, it) })
+        stateMachine.heartDue = { director.isHeartDue() }
+        stateMachine.log = { Log.i(STATE_TAG, it) }
         stateMachine.idleBusy = { director.isSceneRunning() }
         stateMachine.distractingScene = { director.isDistractingSceneRunning() }
         stateMachine.onSceneCut = { overlayManager.getCharacterView()?.cutScene() }
@@ -220,7 +244,31 @@ class CompanionService : Service(),
                 switchProfileManually()
                 return START_STICKY
             }
+            ACTION_PREVIEW -> {
+                val name = intent.getStringExtra(EXTRA_ANIMATION)
+                if (!providersStarted) {
+                    // Not running (the intent created the service): nothing to play on, do not start Mimio.
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                if (name != null && overlayManager.isVisible()) {
+                    director.preview(name)
+                    if (!stateMachine.startPreview()) Log.i(STATE_TAG, "preview $name refused: busy")
+                }
+                return START_STICKY
+            }
         }
+
+        if (intent == null && shouldStayStopped()) {
+            // A sticky restart after Mimio stopped itself at 1 %: stay stopped (a foreground start must still
+            // reach startForeground before it may end).
+            startForegroundWithNotification()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // Started by the user (settings, tile) or at boot: a stop at 1 % is over.
+        settings.stoppedForLowBattery = false
 
         // Default start
         startForegroundWithNotification()
@@ -428,6 +476,51 @@ class CompanionService : Service(),
 
     override fun onWeatherModifierChanged(modifier: WeatherModifier) {
         overlayManager.getWeatherOverlayView()?.setWeatherModifier(modifier)
+    }
+
+    /**
+     * The fox vanished at 1 %: an explicit stop. It is remembered ([SettingsRepository.stoppedForLowBattery]) so
+     * that a sticky restart keeps it stopped; the process itself is left to Android. The user starts Mimio
+     * again from the app, the tile or the notice posted here.
+     */
+    override fun onLowBatteryShutdown() {
+        Log.i(STATE_TAG, "stopping at low battery")
+        settings.stoppedForLowBattery = true
+        farewell.release()
+        mood.flush()
+        overlayManager.hide()
+        postLowBatteryNotice()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    /** A sticky restart must not bring Mimio back after it stopped itself at 1 %, nor while still at 1 %. */
+    private fun shouldStayStopped(): Boolean {
+        val battery = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+        val plugged = (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        return BatteryWatcher.staysStopped(
+            settings.stoppedForLowBattery, settings.autoHideOnEmptyBattery,
+            if (level >= 0 && scale > 0) level * 100 / scale else -1, plugged
+        )
+    }
+
+    private fun postLowBatteryNotice() {
+        val open = PendingIntent.getActivity(
+            this, 4, Intent(this, SettingsActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notice = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(getString(R.string.low_battery_stopped_title))
+            .setContentText(getString(R.string.low_battery_stopped_text))
+            .setSmallIcon(R.drawable.ic_companion_notification)
+            .setContentIntent(open)
+            .setAutoCancel(true)
+            .build()
+        try {
+            getSystemService(NotificationManager::class.java).notify(LOW_BATTERY_NOTIFICATION_ID, notice)
+        } catch (_: SecurityException) {}      // notifications not allowed: the app shows the state itself
     }
 
     private fun hideOverlay() {

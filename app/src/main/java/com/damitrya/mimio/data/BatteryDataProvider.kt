@@ -27,15 +27,18 @@ class BatteryDataProvider(private val context: Context, private val settings: Se
                 Intent.ACTION_BATTERY_CHANGED -> {
                     val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
                     val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                    val percent = if (scale > 0) (level * 100) / scale else 100
+                    // Unknown (no battery, a broken broadcast): never "0 %", which would look empty.
+                    val percent = if (scale > 0 && level >= 0) (level * 100) / scale else UNKNOWN_LEVEL
                     val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    // A plugged-in charger counts even when the phone reports "not charging" (full, too warm).
                     val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                            status == BatteryManager.BATTERY_STATUS_FULL
+                            status == BatteryManager.BATTERY_STATUS_FULL ||
+                            intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
 
                     currentData = BatteryData(
                         level = percent,
                         isCharging = isCharging,
-                        isLow = percent <= settings.lowBatteryThreshold
+                        isLow = percent in 0..settings.lowBatteryThreshold
                     )
                     listener?.onBatteryDataChanged(currentData)
                 }
@@ -45,6 +48,11 @@ class BatteryDataProvider(private val context: Context, private val settings: Se
                 }
             }
         }
+    }
+
+    companion object {
+        /** [BatteryData.level] when the level is not known. */
+        const val UNKNOWN_LEVEL = -1
     }
 
     fun setListener(listener: Listener?) {

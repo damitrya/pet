@@ -88,8 +88,20 @@ enum class CompanionState(
      */
     PHONE_CALL("", true, "phone_call"),
 
-    /** One-shot worry when the battery gets low (not charging). */
+    /** One-shot worry when the battery drops to the user's threshold (not charging, see [BatteryWatcher]). */
     LOW_BATTERY("", false, "low_battery"),
+
+    /** One-shot sadness at 10 % (not charging): ears down, holds an almost empty battery. */
+    BATTERY_CRITICAL("", false, "battery_sad"),
+
+    /**
+     * One-shot at 1 % with auto-hiding on: the fox curls into a fluffy cloud and fades away, then the service
+     * stops ([StateMachine.Listener.onLowBatteryShutdown]). Plugging the charger in meanwhile cancels it.
+     */
+    BATTERY_SHUTDOWN("", false, "cloud_farewell"),
+
+    /** One-shot from the settings' debug tools: plays one chosen file ([AnimationDirector.preview]). */
+    PREVIEW("", false, "blink"),
 
     /**
      * One-shot break from dancing: every 20–40 s of MUSIC the character does something else

@@ -36,6 +36,11 @@ import kotlin.random.Random
  * car plays TRIP_PREPARE, the end of a long trip ARRIVAL; both end at once when the car starts moving.
  *
  * Hiding by the user plays FAREWELL first ([startFarewell]); any other state that takes over ends it early.
+ *
+ * Battery ([BatteryWatcher]): LOW_BATTERY at the user's threshold, BATTERY_CRITICAL at 10 %, each once and again
+ * only after a long pause; at 1 % (if the user allowed it) BATTERY_SHUTDOWN, after which the service stops —
+ * unless the charger is plugged in meanwhile. Every [AnimationDirector.HEART_EVERY_PETS]th petting ends as the
+ * heart, even where SHY would come ([heartDue]).
  */
 class StateMachine(
     private val settings: SettingsRepository,
@@ -62,6 +67,9 @@ class StateMachine(
     interface Listener {
         fun onStateChanged(newState: CompanionState, previousState: CompanionState)
         fun onWeatherModifierChanged(modifier: WeatherModifier)
+
+        /** The 1 % goodbye is over (or was cut short): hide the overlay and stop the service. */
+        fun onLowBatteryShutdown() {}
     }
 
     private var listener: Listener? = null
@@ -108,8 +116,17 @@ class StateMachine(
     private var turnAt: Long = 0L
     private var wasTurning: Boolean = false
 
-    /** Next time LOW_BATTERY may play (0 = as soon as the battery is low). */
-    private var nextLowBatteryAt: Long = 0L
+    /** Which battery reaction is due ([updateBatteryData]). */
+    private val battery = BatteryWatcher(clock)
+
+    /** A battery reaction waits for the character to be free (checked again every [BATTERY_RETRY_MS]). */
+    private val batteryRetry = Runnable { checkBattery() }
+
+    /** True while BATTERY_SHUTDOWN plays: the service stops at its end, plugging the charger in cancels it. */
+    private var shutdownRunning = false
+
+    /** The goodbye never takes longer than [SHUTDOWN_TIMEOUT_MS], even if its end is never reported. */
+    private val shutdownTimeout = Runnable { finishShutdown() }
 
     /** Last morning STRETCH; the time provider may report the same first unlock more than once. */
     private var stretchAt: Long = 0L
@@ -162,6 +179,12 @@ class StateMachine(
 
     /** Asks the view to replace the running CALM variant at once (the car started moving). */
     var onSceneCut: () -> Unit = {}
+
+    /** The next petting finale must be the heart ([AnimationDirector.isHeartDue]): HEARTS, never SHY. */
+    var heartDue: () -> Boolean = { false }
+
+    /** Why the machine chose a reaction (petting finales, battery); logcat in the app. */
+    var log: (String) -> Unit = {}
 
     /** Confirmed movement at the previous GPS update (a scene is cut on the rising edge). */
     private var wasMoving: Boolean = false
@@ -291,6 +314,7 @@ class StateMachine(
                 transitionTo(CompanionState.RELIEF)
             }
             CompanionState.FAREWELL -> endFarewell()
+            CompanionState.BATTERY_SHUTDOWN -> finishShutdown()
             CompanionState.FALL_ASLEEP -> {
                 // Music or a call started while dozing off: wake up (from the pose it dozed off in),
                 // then WAKE returns to MUSIC / PHONE_CALL.
@@ -337,7 +361,7 @@ class StateMachine(
     fun onLongPress() {
         if (alertActive) return
         if (petActive) return
-        if (farewellDone != null) return      // already saying goodbye
+        if (farewellDone != null || shutdownRunning) return      // already saying goodbye
 
         petActive = true
         tapQueued = false
@@ -352,7 +376,8 @@ class StateMachine(
     /**
      * Triggered when the finger is released after a long press.
      * Plays HEARTS — or SHY after [SHY_PET_COUNT] pettings within [SHY_WINDOW_MS] —
-     * then returns to the saved looping state.
+     * then returns to the saved looping state. When the heart is due ([heartDue]) it is HEARTS even where SHY
+     * would come: the shy series starts over, so SHY can never keep the heart away.
      */
     fun onLongPressReleased() {
         if (currentState != CompanionState.PET) return
@@ -361,11 +386,18 @@ class StateMachine(
         mood?.onEvent(MoodEvent.PET)
         recentPets.addLast(now)
         while (recentPets.first() < now - SHY_WINDOW_MS) recentPets.removeFirst()
-        if (recentPets.size >= SHY_PET_COUNT) {
-            recentPets.clear()
-            transitionTo(CompanionState.SHY)
-        } else {
-            transitionTo(CompanionState.HEARTS)
+        when {
+            heartDue() -> {
+                if (recentPets.size >= SHY_PET_COUNT) log("petting finale: the heart is due, HEARTS instead of SHY")
+                recentPets.clear()
+                transitionTo(CompanionState.HEARTS)
+            }
+            recentPets.size >= SHY_PET_COUNT -> {
+                recentPets.clear()
+                log("petting finale: SHY (${SHY_PET_COUNT} pettings within ${SHY_WINDOW_MS / 1000} s)")
+                transitionTo(CompanionState.SHY)
+            }
+            else -> transitionTo(CompanionState.HEARTS)
         }
     }
 
@@ -391,7 +423,7 @@ class StateMachine(
      * - Another one-shot is active (BLINK, GREETING, HEARTS…) → queue TAP.
      */
     fun onTap() {
-        if (alertActive || petActive || farewellDone != null) return
+        if (alertActive || petActive || farewellDone != null || shutdownRunning) return
 
         val now = clock()
         val previousTap = recentTaps.lastOrNull()
@@ -472,10 +504,28 @@ class StateMachine(
         done()
     }
 
+    /**
+     * Debug tools: plays the file chosen with [AnimationDirector.preview] once (state PREVIEW), then returns to
+     * the ambient state. Refused (false) during braking, petting or a goodbye.
+     */
+    fun startPreview(): Boolean {
+        if (alertActive || petActive || farewellDone != null || shutdownRunning) return false
+        lastActivityAt = clock()
+        tapQueued = false
+        rememberBaseState()
+        // The view ignores a state it already shows: step out of a running preview to replay.
+        if (currentState == CompanionState.PREVIEW) transitionTo(baseLoopingState)
+        transitionTo(CompanionState.PREVIEW)
+        return true
+    }
+
     fun destroy() {
         cancelBlinkTimer()
         cancelFarewell()
         scheduler.cancel(oneShotWatchdog)
+        scheduler.cancel(batteryRetry)
+        scheduler.cancel(shutdownTimeout)
+        shutdownRunning = false
     }
 
     // Auto profile updates
@@ -650,20 +700,77 @@ class StateMachine(
     }
 
     /**
-     * Low battery (not charging): LOW_BATTERY from CALM or MUSIC, repeated every
-     * [LOW_BATTERY_REPEAT_MS] while it stays low. Battery updates are frequent, so a moment
-     * when the character is busy is simply retried on the next one.
+     * Battery update ([BatteryWatcher] decides what is due). LOW_BATTERY / BATTERY_CRITICAL play from CALM or
+     * MUSIC only; while the character is busy they wait (checked again every [BATTERY_RETRY_MS]). At 1 %, with
+     * auto-hiding on, BATTERY_SHUTDOWN. The charger plugged in during it cancels the shutdown.
      */
     fun updateBatteryData(data: BatteryData) {
-        if (!data.isLow || data.isCharging) {
-            nextLowBatteryAt = 0L
-            return
+        battery.update(data.level, data.isCharging, settings.lowBatteryThreshold)
+        if (data.isCharging && shutdownRunning) cancelShutdown()
+        checkBattery()
+    }
+
+    private fun checkBattery() {
+        scheduler.cancel(batteryRetry)
+        val event = battery.due(settings.lowBatteryThreshold)
+        val played = when (event) {
+            BatteryEvent.NONE -> return
+            BatteryEvent.EMPTY -> {
+                if (!settings.autoHideOnEmptyBattery) {
+                    battery.played(event)            // the user keeps Mimio running at 1 %
+                    return
+                }
+                startShutdown()
+            }
+            BatteryEvent.LOW, BatteryEvent.CRITICAL -> {
+                if (isAmbientAwake()) {
+                    battery.played(event)
+                    log("battery: $event")
+                    rememberBaseState()
+                    transitionTo(if (event == BatteryEvent.LOW) CompanionState.LOW_BATTERY else CompanionState.BATTERY_CRITICAL)
+                    true
+                } else false
+            }
         }
-        val now = clock()
-        if (now < nextLowBatteryAt || !isAmbientAwake()) return
-        nextLowBatteryAt = now + LOW_BATTERY_REPEAT_MS
+        if (!played) scheduler.postDelayed(batteryRetry, BATTERY_RETRY_MS)
+    }
+
+    /** The 1 % goodbye; false while braking, a sharp turn, petting or the user's farewell plays (retried). */
+    private fun startShutdown(): Boolean {
+        if (shutdownRunning) return true
+        if (alertActive || petActive || farewellDone != null || currentState in TURNS) return false
+        battery.played(BatteryEvent.EMPTY)
+        log("battery: 1 %, the fox turns into a cloud and Mimio stops")
+        tapQueued = false
         rememberBaseState()
-        transitionTo(CompanionState.LOW_BATTERY)
+        shutdownRunning = true
+        transitionTo(CompanionState.BATTERY_SHUTDOWN)
+        scheduler.postDelayed(shutdownTimeout, SHUTDOWN_TIMEOUT_MS)
+        return true
+    }
+
+    fun isShutdownRunning(): Boolean = shutdownRunning
+
+    /** The charger came in time: no shutdown, the fox reappears and waves. */
+    private fun cancelShutdown() {
+        shutdownRunning = false
+        scheduler.cancel(shutdownTimeout)
+        log("battery: charging, the shutdown is cancelled")
+        if (currentState == CompanionState.BATTERY_SHUTDOWN) transitionTo(CompanionState.GREETING)
+    }
+
+    /** The goodbye is over (its end or the timeout): stop, and rest in the ambient state behind the removed overlay. */
+    private fun finishShutdown() {
+        shutdownNow()
+        if (currentState == CompanionState.BATTERY_SHUTDOWN) transitionTo(ambientState())
+    }
+
+    /** Tells the service to hide and stop (once). */
+    private fun shutdownNow() {
+        if (!shutdownRunning) return
+        shutdownRunning = false
+        scheduler.cancel(shutdownTimeout)
+        listener?.onLowBatteryShutdown()
     }
 
     /** First unlock of the day in the morning: STRETCH (also straight out of SLEEP). */
@@ -756,6 +863,8 @@ class StateMachine(
         val previous = currentState
         // Something else took over the farewell (braking, a profile switch…): hide now, before it shows.
         if (previous == CompanionState.FAREWELL && newState != CompanionState.FAREWELL) finishFarewell()
+        // ...the same for the 1 % goodbye (the charger cancels it before getting here).
+        if (previous == CompanionState.BATTERY_SHUTDOWN && newState != CompanionState.BATTERY_SHUTDOWN) shutdownNow()
 
         // If a one-shot was cut short by a looping state, the queued tap is stale.
         if (!previous.isLooping && newState.isLooping) {
@@ -850,11 +959,19 @@ class StateMachine(
         /** The overlay is hidden at the latest this long after the farewell began (the heart takes ≈4.6 s). */
         const val FAREWELL_TIMEOUT_MS = 6_000L
 
-        /** No farewell during critical car reactions or while asleep: hiding is immediate then. */
+        /** No farewell during critical car reactions, while asleep or vanishing at 1 %: hiding is immediate then. */
         private val NO_FAREWELL = setOf(
             CompanionState.ALERT, CompanionState.TURN_LEFT, CompanionState.TURN_RIGHT,
-            CompanionState.SLEEP, CompanionState.FALL_ASLEEP
+            CompanionState.SLEEP, CompanionState.FALL_ASLEEP, CompanionState.BATTERY_SHUTDOWN
         )
+
+        private val TURNS = setOf(CompanionState.TURN_LEFT, CompanionState.TURN_RIGHT)
+
+        /** The 1 % goodbye ends the service at the latest this long after it began (the cloud takes ≈4 s). */
+        const val SHUTDOWN_TIMEOUT_MS = 6_000L
+
+        /** A battery reaction waiting for a busy character is checked again this often. */
+        private const val BATTERY_RETRY_MS = 5_000L
 
         /**
          * A stop shorter than this still counts as driving for the choice of animations (no scenes);
@@ -893,16 +1010,13 @@ class StateMachine(
         private val TURN_INTERRUPTIBLE = setOf(
             CompanionState.CALM, CompanionState.MUSIC, CompanionState.PHONE_CALL, CompanionState.SLEEP,
             CompanionState.BLINK, CompanionState.FIDGET, CompanionState.DROWSY, CompanionState.LOW_BATTERY,
-            CompanionState.STRETCH, CompanionState.GREETING, CompanionState.FALL_ASLEEP,
-            CompanionState.TRIP_PREPARE
+            CompanionState.BATTERY_CRITICAL, CompanionState.STRETCH, CompanionState.GREETING,
+            CompanionState.FALL_ASLEEP, CompanionState.TRIP_PREPARE, CompanionState.PREVIEW
         )
 
         /** Minimum speed and pause between sharp-turn reactions. */
         private const val TURN_MIN_KMH = 20f
         private const val TURN_COOLDOWN_MS = 4000L
-
-        /** How often LOW_BATTERY repeats while the battery stays low and is not charging. */
-        private const val LOW_BATTERY_REPEAT_MS = 10 * 60_000L
 
         /** A repeated first-unlock report within this time does not stretch again. */
         private const val STRETCH_DEDUP_MS = 60_000L

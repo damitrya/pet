@@ -95,4 +95,32 @@
 
     <!-- Version -->
     <string name="version_info">Mimio v2.0</string>
+
+    <!-- Haptics (wave 5) -->
+    <string name="haptics_off">Выключено</string>
+    <string name="haptics_soft">Мягкая</string>
+    <string name="haptics_expressive">Выразительная</string>
+    <string name="btn_test_haptics">Проверить отклик</string>
+    <string name="haptics_test_running">Проверка: стандартный отклик системы, затем касание, начало поглаживания и сердечко.</string>
+    <string name="haptics_test_off">Отклик выключен — для проверки показан мягкий режим.</string>
+
+    <!-- Battery (wave 5) -->
+    <string name="label_auto_hide_battery">Автоматически скрывать Mimio при 1% заряда</string>
+    <string name="low_battery_threshold_hint">При 10% и ниже лисёнок всегда грустит с батарейкой; предупреждения повторяются не чаще раза в 30 минут.</string>
+    <string name="low_battery_stopped_title">Mimio остановлен: заряд 1%</string>
+    <string name="low_battery_stopped_text">Зарядите телефон и запустите Mimio снова.</string>
+    <string name="low_battery_stopped_note">Mimio остановился сам при 1% заряда. Запустите его снова, когда будет удобно.</string>
+
+    <!-- Debug tools -->
+    <string name="section_debug">Отладка: предпросмотр анимаций</string>
+    <string name="debug_hint">Играет выбранную анимацию на запущенном лисёнке. Ни на что не влияет: ни на настроение, ни на счётчики.</string>
+    <string name="btn_preview_heart">Показать превращение в сердечко</string>
+    <string name="label_preview_inertia">Наклоны в машине (пока только предпросмотр)</string>
+    <string name="inertia_left">← Влево</string>
+    <string name="inertia_right">Вправо →</string>
+    <string name="inertia_forward">Тормоз</string>
+    <string name="inertia_back">Разгон</string>
+    <string name="label_preview_any">Любая анимация</string>
+    <string name="btn_preview_play">Играть</string>
+    <string name="preview_not_running">Сначала запустите компаньона и покажите лисёнка</string>
 </resources>

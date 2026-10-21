@@ -1,39 +1,41 @@
 package com.damitrya.mimio.overlay
 
 import android.os.SystemClock
+import com.damitrya.mimio.data.HapticMode
 
 /**
- * Short haptic ticks for the user's own touches: a tap, a recognised long press, and the moment the fox
- * becomes a heart (a petting finale or the farewell, both started by the user). Automatic reactions
- * (braking, turns, GPS) never call this.
+ * Haptic responses to the user's own touches: a tap, the start of a petting (a recognised long press), and the
+ * moment the fox becomes a heart (a petting finale or the farewell, both started by the user). Automatic
+ * reactions (braking, turns, GPS, battery, music) never call this, and holding the finger never buzzes on:
+ * one response per recognised action.
  *
- * One tick per recognised action, and never closer than [MIN_GAP_MS] to the previous one, so tap spam
- * cannot turn into a buzz. [perform] plays the effect through the standard View haptic feedback, which
- * also follows the system "touch feedback" setting.
+ * Never closer than [MIN_GAP_MS] to the previous response, so tap spam or one touch reported twice cannot
+ * turn into a buzz. [perform] plays the effect in the chosen [HapticMode] ([HapticPlayer] on the device).
  */
 class TouchHaptics(
-    private val enabled: () -> Boolean,
+    private val mode: () -> HapticMode,
     private val clock: () -> Long = SystemClock::uptimeMillis,
-    private val perform: (Effect) -> Boolean
+    private val perform: (Effect, HapticMode) -> Boolean
 ) {
     enum class Effect {
-        /** Light single click: a short tap. */
+        /** A short tap: one very short pulse. */
         TAP,
-        /** Soft response when a long press is recognised (petting starts). */
+        /** Petting starts (held 600 ms): two soft pulses. */
         HOLD,
-        /** Very short tick when the heart is complete. */
+        /** The heart is complete: three short pulses growing stronger. */
         HEART
     }
 
     private var lastAt = Long.MIN_VALUE / 2
 
-    /** Plays [effect] if haptics are on in the app settings and the last tick is not too recent. */
+    /** Plays [effect] unless haptics are off in the app settings or the last response is too recent. */
     fun play(effect: Effect): Boolean {
-        if (!enabled()) return false
+        val m = mode()
+        if (m == HapticMode.OFF) return false
         val now = clock()
         if (now - lastAt < MIN_GAP_MS) return false
         lastAt = now
-        return perform(effect)
+        return perform(effect, m)
     }
 
     companion object {

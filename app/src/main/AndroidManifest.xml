@@ -35,6 +35,9 @@
     <!-- Phone call detection (optional) -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- Haptic responses to the user's touches (VibrationEffect patterns); a normal permission, no prompt -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Bluetooth auto-profile switching (optional) -->
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

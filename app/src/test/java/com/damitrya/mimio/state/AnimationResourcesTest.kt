@@ -87,6 +87,26 @@ class AnimationResourcesTest {
     }
 
     @Test
+    fun wave5AnimationsAreCompatibleAnimatedWebp() {
+        for (name in WAVE5) {
+            val info = readWebp(File(rawDir, "fox_$name.webp"))
+            assertEquals("$name width", 128, info.width)
+            assertEquals("$name height", 128, info.height)
+            assertTrue("$name is animated", info.animated)
+            assertTrue("$name has alpha", info.alpha)
+            assertTrue("$name frames ${info.frames}", info.frames >= 60)
+            assertEquals(0, info.loopCount)
+            assertEquals("$name: 25 fps", info.frames * 40L, info.durationMs)
+        }
+        for (name in AnimationPools.MUSIC_SHOWS_WAVE5) {
+            val ms = readWebp(File(rawDir, "fox_$name.webp")).durationMs
+            assertTrue("$name: a show ends before it stops counting as one ($ms ms)", ms <= AnimationDirector.MAX_SCENE_MS)
+        }
+        val cloud = readWebp(File(rawDir, "fox_cloud_farewell.webp")).durationMs
+        assertTrue("the cloud ends before the shutdown's safety timeout: $cloud", cloud < StateMachine.SHUTDOWN_TIMEOUT_MS)
+    }
+
+    @Test
     fun previewOnlyAnimationsExist() {
         for (name in AnimationPools.PREVIEW_ONLY) assertTrue(name, "fox_$name" in files)
     }
@@ -148,6 +168,11 @@ class AnimationResourcesTest {
         )
 
         val WAVE4 = listOf("heart_transform", "dance_side", "microphone", "guitar", "tail_back")
+
+        val WAVE5 = listOf(
+            "bayan", "balalaika", "punk", "battery_sad", "cloud_farewell",
+            "inertia_left", "inertia_right", "inertia_forward", "inertia_back"
+        )
 
         val WAVE3 = listOf(
             "tail_hide", "grooming", "butterfly", "curl_up", "sleep_curled", "wake_curled",

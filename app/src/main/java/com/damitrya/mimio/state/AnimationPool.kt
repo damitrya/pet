@@ -90,11 +90,24 @@ class AnimationPool(
         val ready = allowed.filter { cooldownLeft[it] == 0 }.ifEmpty { allowed }
         val chosen = weightedChoice(ready, weights, random)
 
+        markPicked(chosen)
+        return variants[chosen]
+    }
+
+    /** Counts [variant], chosen outside [pick] (a guaranteed heart), as a pick: the cooldowns go on as usual. */
+    fun markPicked(variant: AnimationVariant) {
+        val i = variants.indexOf(variant)
+        if (i >= 0) markPicked(i)
+    }
+
+    /** Picks [variant] still sits out (0 = may be chosen). */
+    fun cooldownOf(variant: AnimationVariant): Int = variants.indexOf(variant).let { if (it >= 0) cooldownLeft[it] else 0 }
+
+    private fun markPicked(chosen: Int) {
         for (i in cooldownLeft.indices) {
             if (cooldownLeft[i] > 0) cooldownLeft[i]--
         }
         cooldownLeft[chosen] = variants[chosen].cooldown
-        return variants[chosen]
     }
 
     private fun weightedChoice(indices: List<Int>, weights: DoubleArray, random: Random): Int {
@@ -121,10 +134,14 @@ object AnimationPools {
     private const val MINUTE = 60_000L
 
     /**
-     * Animations with no automatic trigger yet: they exist for the gallery and manual preview only
-     * (pothole — a reliable bump detector is still missing). Kept out of every pool on purpose.
+     * Animations with no automatic trigger yet: they exist for the gallery and the manual preview (settings →
+     * debug tools) only. A reliable bump detector is still missing (pothole), and the inertia leans are not
+     * wired to GPS / accelerometer / gyroscope yet. Kept out of every pool on purpose.
      */
-    val PREVIEW_ONLY = setOf("pothole")
+    val PREVIEW_ONLY = setOf("pothole", "inertia_left", "inertia_right", "inertia_forward", "inertia_back")
+
+    /** Music shows of wave 5: an accordion (bayan), a balalaika and a punk dance with a mohawk. */
+    val MUSIC_SHOWS_WAVE5 = listOf("bayan", "balalaika", "punk")
 
     /** The fox turns into a heart: a petting finale and the farewell when the user hides it. */
     const val HEART_TRANSFORM = "heart_transform"
@@ -198,7 +215,14 @@ object AnimationPools {
                 AnimationVariant("dance_side", weight = 10, cooldown = 3, minGapMs = MINUTE, tags = setOf(AnimTag.ACTIVE)),
                 AnimationVariant("microphone", weight = 4, cooldown = 8, minGapMs = 4 * MINUTE,
                     tags = setOf(AnimTag.SCENE, AnimTag.FRIENDLY)),
-                AnimationVariant("guitar", weight = 4, cooldown = 8, minGapMs = 4 * MINUTE, tags = setOf(AnimTag.SCENE))
+                AnimationVariant("guitar", weight = 4, cooldown = 8, minGapMs = 4 * MINUTE, tags = setOf(AnimTag.SCENE)),
+                // Wave 5: more shows, as rare as the guitar (SCENE: spaced apart from every other show, never
+                // while driving; the long minGap keeps any one of them from coming back again and again).
+                AnimationVariant("bayan", weight = 3, cooldown = 8, minGapMs = 5 * MINUTE,
+                    tags = setOf(AnimTag.SCENE, AnimTag.FRIENDLY)),
+                AnimationVariant("balalaika", weight = 3, cooldown = 8, minGapMs = 5 * MINUTE, tags = setOf(AnimTag.SCENE)),
+                AnimationVariant("punk", weight = 3, cooldown = 10, minGapMs = 6 * MINUTE,
+                    tags = setOf(AnimTag.SCENE, AnimTag.ACTIVE))
             ),
             CompanionState.TAP to pool(
                 AnimationVariant("tap", weight = 45),
@@ -251,6 +275,11 @@ object AnimationPools {
             CompanionState.TURN_RIGHT to single("turn_right", fallback = "alert"),
             CompanionState.PHONE_CALL to single("phone_call", fallback = "idle_small"),
             CompanionState.LOW_BATTERY to single("low_battery", fallback = "blink"),
+            // Wave 5: battery at 10 % and the 1 % goodbye (the slime blinks, then the service stops).
+            CompanionState.BATTERY_CRITICAL to single("battery_sad", fallback = "blink"),
+            CompanionState.BATTERY_SHUTDOWN to single("cloud_farewell", fallback = "blink"),
+            // The file comes from AnimationDirector.preview(); this is only what plays without one.
+            CompanionState.PREVIEW to single("blink"),
             CompanionState.STRETCH to single("stretch", fallback = "idle2"),
             CompanionState.FIDGET to pool(
                 AnimationVariant("blink", weight = 15, tags = setOf(AnimTag.BASE)),

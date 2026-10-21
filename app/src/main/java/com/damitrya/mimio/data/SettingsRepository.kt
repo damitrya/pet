@@ -28,6 +28,9 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         const val KEY_AUTO_START = "auto_start_enabled"
         const val KEY_SERVICE_ENABLED = "service_enabled"
         const val KEY_HAPTICS = "haptics_enabled"
+        const val KEY_HAPTICS_MODE = "haptics_mode"
+        const val KEY_AUTO_HIDE_EMPTY_BATTERY = "auto_hide_empty_battery"
+        const val KEY_STOPPED_LOW_BATTERY = "stopped_for_low_battery"
 
         // Profile
         const val KEY_ACTIVE_PROFILE = "active_profile"
@@ -132,10 +135,28 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean(KEY_AUTO_START, false)
         set(value) = prefs.edit().putBoolean(KEY_AUTO_START, value).apply()
 
-    /** Short haptic ticks on the user's own taps and long presses (never on automatic reactions). */
-    var hapticsEnabled: Boolean
-        get() = prefs.getBoolean(KEY_HAPTICS, true)
-        set(value) = prefs.edit().putBoolean(KEY_HAPTICS, value).apply()
+    /**
+     * Haptic responses to the user's own taps and pettings (never to automatic reactions): [HapticMode.OFF],
+     * [HapticMode.SOFT] (default) or [HapticMode.EXPRESSIVE]. Before wave 5 it was an on/off switch
+     * ([KEY_HAPTICS]): switched off stays off.
+     */
+    var hapticMode: HapticMode
+        get() = HapticMode.parse(prefs.getString(KEY_HAPTICS_MODE, null))
+            ?: if (prefs.getBoolean(KEY_HAPTICS, true)) HapticMode.SOFT else HapticMode.OFF
+        set(value) = prefs.edit().putString(KEY_HAPTICS_MODE, value.name).apply()
+
+    /** At 1 % (not charging) the fox turns into a cloud and Mimio stops. Off by default. */
+    var autoHideOnEmptyBattery: Boolean
+        get() = prefs.getBoolean(KEY_AUTO_HIDE_EMPTY_BATTERY, false)
+        set(value) = prefs.edit().putBoolean(KEY_AUTO_HIDE_EMPTY_BATTERY, value).apply()
+
+    /**
+     * Mimio stopped itself at 1 %: a sticky restart by the system must not bring it back. Cleared when the user
+     * (or the boot receiver) starts it again.
+     */
+    var stoppedForLowBattery: Boolean
+        get() = prefs.getBoolean(KEY_STOPPED_LOW_BATTERY, false)
+        set(value) = prefs.edit().putBoolean(KEY_STOPPED_LOW_BATTERY, value).apply()
 
     var serviceEnabled: Boolean
         get() = prefs.getBoolean(KEY_SERVICE_ENABLED, false)
@@ -208,4 +229,13 @@ class SettingsRepository(private val prefs: SharedPreferences) {
 
     fun unregisterChangeListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) =
         prefs.unregisterOnSharedPreferenceChangeListener(listener)
+}
+
+/** Strength of the haptic responses ([SettingsRepository.hapticMode]). */
+enum class HapticMode {
+    OFF, SOFT, EXPRESSIVE;
+
+    companion object {
+        fun parse(name: String?): HapticMode? = values().firstOrNull { it.name == name }
+    }
 }
