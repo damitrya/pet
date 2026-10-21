@@ -150,10 +150,10 @@ class CharacterView @JvmOverloads constructor(
         }
 
         removeCallbacks(heartTick)
-        if (variant?.resName == AnimationPools.HEART_TRANSFORM &&
-            resId == resolveRawRes(settings.character, AnimationPools.HEART_TRANSFORM)   // not a fallback
-        ) {
-            postDelayed(heartTick, AnimationPools.HEART_MOMENT_MS)
+        if (variant?.resName == AnimationPools.HEART_TRANSFORM) {
+            val own = resId == resolveRawRes(settings.character, AnimationPools.HEART_TRANSFORM)   // not a fallback
+            if (own) postDelayed(heartTick, AnimationPools.HEART_MOMENT_MS)
+            Log.i(HEART_TAG, "state=$state plays ${if (own) "heart_transform" else "the fallback"} (res $resId)")
         }
 
         val drawable = obtainDrawable(resId)
@@ -327,5 +327,6 @@ class CharacterView @JvmOverloads constructor(
         private const val MEMORY_LOG_MS = 60_000L
         private const val MEMORY_TAG = "MimioMem"
         private const val ANIM_TAG = "MimioAnim"
+        private const val HEART_TAG = "MimioHeart"
     }
 }

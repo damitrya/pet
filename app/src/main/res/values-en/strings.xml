@@ -95,4 +95,32 @@
 
     <!-- Version -->
     <string name="version_info">Mimio v2.0</string>
+
+    <!-- Haptics (wave 5) -->
+    <string name="haptics_off">Off</string>
+    <string name="haptics_soft">Soft</string>
+    <string name="haptics_expressive">Expressive</string>
+    <string name="btn_test_haptics">Test feedback</string>
+    <string name="haptics_test_running">Test: the system\'s standard feedback, then a tap, the start of petting and the heart.</string>
+    <string name="haptics_test_off">Feedback is off — the soft mode is shown for the test.</string>
+
+    <!-- Battery (wave 5) -->
+    <string name="label_auto_hide_battery">Hide Mimio automatically at 1% battery</string>
+    <string name="low_battery_threshold_hint">At 10% and below the fox always looks sad with its battery; warnings repeat at most every 30 minutes.</string>
+    <string name="low_battery_stopped_title">Mimio stopped: battery at 1%</string>
+    <string name="low_battery_stopped_text">Charge the phone and start Mimio again.</string>
+    <string name="low_battery_stopped_note">Mimio stopped itself at 1% battery. Start it again whenever you like.</string>
+
+    <!-- Debug tools -->
+    <string name="section_debug">Debug: animation preview</string>
+    <string name="debug_hint">Plays the chosen animation on the running fox. Changes nothing: no mood, no counters.</string>
+    <string name="btn_preview_heart">Show the heart transformation</string>
+    <string name="label_preview_inertia">Car leans (preview only for now)</string>
+    <string name="inertia_left">← Left</string>
+    <string name="inertia_right">Right →</string>
+    <string name="inertia_forward">Brake</string>
+    <string name="inertia_back">Speed up</string>
+    <string name="label_preview_any">Any animation</string>
+    <string name="btn_preview_play">Play</string>
+    <string name="preview_not_running">Start the companion and show the fox first</string>
 </resources>

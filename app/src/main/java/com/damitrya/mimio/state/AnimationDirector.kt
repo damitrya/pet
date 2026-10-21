@@ -30,6 +30,10 @@ data class PlayContext(
  * - **variety**: variants played recently lose weight, [AnimationVariant.minGapMs] spaces rare ones out,
  *   and self-started scenes are at least [SCENE_GAP_MS] apart;
  * - **calm first**: in pools with [AnimTag.BASE] variants those keep at least [MIN_BASE_SHARE] of the chance;
+ * - **the heart**: every [HEART_EVERY_PETS]th petting finale (HEARTS or SHY) without a heart turns into a heart
+ *   for sure ([isHeartDue]; the state machine then plays HEARTS instead of SHY); cooldown and minGap only hold
+ *   back the random heart in between. Why it was or was not picked goes to [log];
+ * - **preview**: [preview] makes the next PREVIEW play one given file (settings → debug tools);
  * - **sequences**: a variant's [AnimationVariant.next] decides what the following states play
  *   (curl_up → sleep_curled → wake_curled), but only once that variant has played to its end — the
  *   follow-ups continue from its last pose. Any other state in between (a tap while still lying down,
@@ -44,7 +48,9 @@ class AnimationDirector(
     private val mood: CharacterMood,
     private val context: () -> PlayContext = { PlayContext() },
     private val random: Random = Random.Default,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** Why the heart was (not) picked, guaranteed or not (logcat in the app). */
+    private val log: (String) -> Unit = {}
 ) {
     private val pools: Map<CompanionState, AnimationPool> = AnimationPools.create(random)
 
@@ -65,6 +71,20 @@ class AnimationDirector(
     private var currentState: CompanionState? = null
     private var currentStartedAt: Long = 0L
 
+    /** Petting finales (HEARTS or SHY picks) since the fox last turned into a heart. */
+    private var finalesSinceHeart = 0
+
+    /** File the next PREVIEW plays (null: the PREVIEW pool's placeholder). */
+    private var previewName: String? = null
+
+    /** The next petting finale must be the heart: it is the [HEART_EVERY_PETS]th one without a heart. */
+    fun isHeartDue(): Boolean = finalesSinceHeart >= HEART_EVERY_PETS - 1
+
+    /** The next PREVIEW plays [resName] (raw name without the character prefix, e.g. "inertia_left"). */
+    fun preview(resName: String) {
+        previewName = resName
+    }
+
     /**
      * Picks the variant [state] plays next, or null if the character has none.
      * [isAvailable] tells whether the current character can play a variant (own file or fallback).
@@ -80,11 +100,71 @@ class AnimationDirector(
         }
 
         val pool = pools[state] ?: return null
+        if (state == CompanionState.PREVIEW) pickPreview(isAvailable)?.let { return it }
+        if (state == CompanionState.HEARTS && isHeartDue()) {
+            val heart = pool.variants.first { it.resName == AnimationPools.HEART_TRANSFORM }
+            if (isAvailable(heart)) {
+                // Guaranteed: neither the cooldown nor the minimum gap may hold it back.
+                log("HEARTS → ${heart.resName}: guaranteed, finale ${finalesSinceHeart + 1} without a heart")
+                pool.markPicked(heart)
+                return played(state, heart, now)
+            }
+            log("HEARTS: the heart is due, but this character has no ${heart.resName}")
+            finalesSinceHeart = 0
+        }
         val weights = weightsFor(pool, isAvailable, now)
+        val heartCooldown = if (state == CompanionState.HEARTS) heartCooldown(pool) else 0
         val chosen = pool.pick(isAvailable, { weights[it] ?: 0.0 }, random) ?: return null
+        if (state == CompanionState.HEARTS) {
+            log("HEARTS → ${chosen.resName}: ${heartReason(pool, chosen, weights, heartCooldown, isAvailable, now)}")
+        }
         armedNext = chosen.next
         return played(state, chosen, now)
     }
+
+    /** The requested preview file, played as it is: no history, no gaps, no mood. */
+    private fun pickPreview(isAvailable: (AnimationVariant) -> Boolean): AnimationVariant? {
+        val name = previewName ?: return null
+        previewName = null
+        val v = AnimationVariant(name)
+        if (!isAvailable(v)) {
+            log("PREVIEW: no file for $name")
+            return null
+        }
+        current = v
+        currentState = CompanionState.PREVIEW
+        currentStartedAt = clock()
+        return v
+    }
+
+    private fun heartCooldown(pool: AnimationPool): Int =
+        pool.cooldownOf(pool.variants.first { it.resName == AnimationPools.HEART_TRANSFORM })
+
+    /** Why a random petting finale did or did not become the heart (for the log). */
+    private fun heartReason(
+        pool: AnimationPool,
+        chosen: AnimationVariant,
+        weights: Map<AnimationVariant, Double>,
+        cooldown: Int,
+        isAvailable: (AnimationVariant) -> Boolean,
+        now: Long
+    ): String {
+        val heart = pool.variants.first { it.resName == AnimationPools.HEART_TRANSFORM }
+        val left = HEART_EVERY_PETS - 1 - finalesSinceHeart
+        val w = weights[heart] ?: 0.0
+        val total = weights.values.sum()
+        val last = lastPlayedAt[heart.resName]
+        return when {
+            chosen == heart -> "random heart (chance ${percent(w, total)}%)"
+            !isAvailable(heart) -> "no heart: this character has no file"
+            last != null && now - last < heart.minGapMs -> "no heart: minimum gap, ${(heart.minGapMs - (now - last)) / 1000} s left"
+            cooldown > 0 -> "no heart: cooldown, $cooldown more pick(s)"
+            w <= 0.0 -> "no heart: weight 0 in this context"
+            else -> "no heart this time (chance ${percent(w, total)}%), guaranteed in $left more petting(s)"
+        }
+    }
+
+    private fun percent(w: Double, total: Double) = if (total > 0) (100 * w / total).toInt() else 0
 
     /** Called when a variant played to its last frame (looping cycle or one-shot). */
     fun onFinished(state: CompanionState, variant: AnimationVariant) {
@@ -205,6 +285,9 @@ class AnimationDirector(
         lastPlayedAt[v.resName] = now
         if (AnimTag.SCENE in v.tags) lastSceneAt = now
         if (AnimTag.MAINTENANCE in v.tags) lastMaintenanceAt = now
+        if (state == CompanionState.HEARTS || state == CompanionState.SHY) {
+            if (v.resName == AnimationPools.HEART_TRANSFORM) finalesSinceHeart = 0 else finalesSinceHeart++
+        }
         current = v
         currentState = state
         currentStartedAt = now
@@ -238,5 +321,8 @@ class AnimationDirector(
 
         /** [AnimTag.PREPARING] variants while getting ready for a trip. */
         const val PREPARING_FACTOR = 3.0
+
+        /** Every this many petting finales at least one is the heart (counting from the last heart). */
+        const val HEART_EVERY_PETS = 5
     }
 }

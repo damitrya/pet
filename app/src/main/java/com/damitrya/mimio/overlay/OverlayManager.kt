@@ -8,7 +8,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -51,15 +50,11 @@ class OverlayManager(
      */
     var onLongPressCancelledListener: (() -> Unit)? = null
 
-    /** Ticks for the user's touches (tap, long press, the heart); off in the settings → silent. */
-    private val haptics = TouchHaptics({ settings.hapticsEnabled }) { effect ->
-        overlayView?.performHapticFeedback(
-            when (effect) {
-                TouchHaptics.Effect.TAP -> HapticFeedbackConstants.KEYBOARD_TAP
-                TouchHaptics.Effect.HOLD -> HapticFeedbackConstants.LONG_PRESS
-                TouchHaptics.Effect.HEART -> HapticFeedbackConstants.CLOCK_TICK
-            }
-        ) ?: false
+    private val hapticPlayer = HapticPlayer(context)
+
+    /** Responses to the user's touches (tap, petting, the heart) in the chosen mode; OFF in the settings → silent. */
+    private val haptics = TouchHaptics({ settings.hapticMode }) { effect, mode ->
+        hapticPlayer.play(effect, mode, overlayView)
     }
 
     fun getCharacterView(): CharacterView? = characterView

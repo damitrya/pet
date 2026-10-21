@@ -3,27 +3,41 @@ package com.damitrya.mimio.ui
 import android.Manifest
 import android.bluetooth.BluetoothManager
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.view.HapticFeedbackConstants
 import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.damitrya.mimio.R
+import com.damitrya.mimio.data.HapticMode
 import com.damitrya.mimio.data.SettingsRepository
 import com.damitrya.mimio.databinding.ActivitySettingsBinding
+import com.damitrya.mimio.overlay.HapticPlayer
+import com.damitrya.mimio.overlay.TouchHaptics
 import com.damitrya.mimio.service.CompanionService
+import com.damitrya.mimio.state.AnimationPools
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivitySettingsBinding
     private lateinit var settings: SettingsRepository
+
+    /** Steps of the running "Test feedback" demo (cancelled when the screen goes away). */
+    private val hapticDemo = Handler(Looper.getMainLooper())
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -55,6 +69,8 @@ class SettingsActivity : AppCompatActivity() {
         settings = SettingsRepository(this)
 
         setupUI()
+        setupHapticsUI()
+        setupDebugTools()
         setupProfileUI()
         setupDailySettingsUI()
         updatePermissionStatus()
@@ -65,6 +81,11 @@ class SettingsActivity : AppCompatActivity() {
         super.onResume()
         updatePermissionStatus()
         updateServiceButton()
+    }
+
+    override fun onDestroy() {
+        hapticDemo.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     private fun setupUI() {
@@ -141,9 +162,9 @@ class SettingsActivity : AppCompatActivity() {
             settings.sensorReactionEnabled = isChecked
         }
 
-        binding.switchHaptics.isChecked = settings.hapticsEnabled
-        binding.switchHaptics.setOnCheckedChangeListener { _, isChecked ->
-            settings.hapticsEnabled = isChecked
+        binding.switchAutoHideBattery.isChecked = settings.autoHideOnEmptyBattery
+        binding.switchAutoHideBattery.setOnCheckedChangeListener { _, isChecked ->
+            settings.autoHideOnEmptyBattery = isChecked
         }
 
         binding.switchAutoStart.isChecked = settings.autoStartEnabled
@@ -158,6 +179,93 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnGrantPermissions.setOnClickListener {
             requestPermissions()
         }
+    }
+
+    /** Off / Soft / Expressive, and "Test feedback": every effect in turn plus what the device reports. */
+    private fun setupHapticsUI() {
+        binding.radioHaptics.check(
+            when (settings.hapticMode) {
+                HapticMode.OFF -> R.id.radio_haptics_off
+                HapticMode.SOFT -> R.id.radio_haptics_soft
+                HapticMode.EXPRESSIVE -> R.id.radio_haptics_expressive
+            }
+        )
+        binding.radioHaptics.setOnCheckedChangeListener { _, checkedId ->
+            settings.hapticMode = when (checkedId) {
+                R.id.radio_haptics_off -> HapticMode.OFF
+                R.id.radio_haptics_expressive -> HapticMode.EXPRESSIVE
+                else -> HapticMode.SOFT
+            }
+        }
+        binding.btnTestHaptics.setOnClickListener { runHapticsTest() }
+    }
+
+    private fun runHapticsTest() {
+        hapticDemo.removeCallbacksAndMessages(null)
+        val player = HapticPlayer(this)
+        val chosen = settings.hapticMode
+        val mode = if (chosen == HapticMode.OFF) HapticMode.SOFT else chosen
+        val button = binding.btnTestHaptics
+        // 1. The standard mechanism alone, whatever the view settings say: does the system accept it at all?
+        val standard = button.performHapticFeedback(
+            HapticFeedbackConstants.LONG_PRESS, HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+        )
+        // 2–4. Mimio's own responses, as the fox gives them.
+        val steps = listOf(TouchHaptics.Effect.TAP, TouchHaptics.Effect.HOLD, TouchHaptics.Effect.HEART)
+        steps.forEachIndexed { i, effect ->
+            hapticDemo.postDelayed({ player.play(effect, mode, button) }, HAPTIC_DEMO_STEP_MS * (i + 1))
+        }
+        val lines = mutableListOf(getString(R.string.haptics_test_running))
+        if (chosen == HapticMode.OFF) lines += getString(R.string.haptics_test_off)
+        lines += player.diagnostics(chosen, standard)
+        binding.tvHapticsDiagnostics.text = lines.joinToString("\n")
+        binding.tvHapticsDiagnostics.visibility = View.VISIBLE
+    }
+
+    /**
+     * Debug tools: play any animation on the running overlay — the heart on demand, and the car leans that have
+     * no trigger yet. Shown in debug builds; in a release build a long press on the title reveals them.
+     */
+    private fun setupDebugTools() {
+        val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        binding.cardDebug.visibility = if (debuggable) View.VISIBLE else View.GONE
+        binding.tvAppTitle.setOnLongClickListener {
+            binding.cardDebug.visibility = View.VISIBLE
+            true
+        }
+        binding.btnPreviewHeart.setOnClickListener { preview(AnimationPools.HEART_TRANSFORM) }
+        binding.btnInertiaLeft.setOnClickListener { preview("inertia_left") }
+        binding.btnInertiaRight.setOnClickListener { preview("inertia_right") }
+        binding.btnInertiaForward.setOnClickListener { preview("inertia_forward") }
+        binding.btnInertiaBack.setOnClickListener { preview("inertia_back") }
+
+        val names = previewNames()
+        binding.spinnerPreview.adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, names) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                super.getView(position, convertView, parent).also {
+                    (it as? TextView)?.setTextColor(ContextCompat.getColor(context, R.color.text_primary))
+                }
+        }.apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.btnPreviewPlay.setOnClickListener {
+            (binding.spinnerPreview.selectedItem as? String)?.let { preview(it) }
+        }
+    }
+
+    /** Every fox animation the app knows (pools, sequences, preview-only), the newest first. */
+    private fun previewNames(): List<String> {
+        val pooled = AnimationPools.create().values.flatMap { p -> p.variants.flatMap { listOf(it.resName) + it.next.values } }
+        val first = AnimationPools.PREVIEW_ONLY + AnimationPools.MUSIC_SHOWS_WAVE5 +
+            listOf("battery_sad", "cloud_farewell", AnimationPools.HEART_TRANSFORM)
+        return (first + pooled.sorted()).distinct()
+            .filter { resources.getIdentifier("fox_$it", "raw", packageName) != 0 }
+    }
+
+    private fun preview(name: String) {
+        if (!settings.serviceEnabled) {
+            Toast.makeText(this, R.string.preview_not_running, Toast.LENGTH_SHORT).show()
+            return
+        }
+        CompanionService.preview(this, name)
     }
 
     private fun setupProfileUI() {
@@ -383,5 +491,11 @@ class SettingsActivity : AppCompatActivity() {
         } else {
             getString(R.string.btn_start_service)
         }
+        binding.tvServiceNote.visibility =
+            if (!settings.serviceEnabled && settings.stoppedForLowBattery) View.VISIBLE else View.GONE
+    }
+
+    companion object {
+        private const val HAPTIC_DEMO_STEP_MS = 700L
     }
 }

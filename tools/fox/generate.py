@@ -13,6 +13,7 @@ Usage:
     python3 tools/fox/generate.py --wave3         # only the wave 3 animations
     python3 tools/fox/generate.py --car           # only the car companion animations
     python3 tools/fox/generate.py --wave4         # only the wave 4 animations (heart, music shows, turning)
+    python3 tools/fox/generate.py --wave5         # only the wave 5 animations (bayan, balalaika, punk, battery, leans)
     python3 tools/fox/generate.py --preview DIR   # also write preview sheet/GIF
     python3 tools/fox/generate.py --gallery       # also write tools/fox/gallery.html
     python3 tools/fox/generate.py --gallery-only  # just rebuild the gallery from existing files
@@ -306,6 +307,24 @@ def hop(p, t, a, b, height, prep=0.07, settle=0.12):
         p["ear_out"] += 10 * max(0.0, sq)
 
 
+def soft_hop(p, t, a, b, height):
+    """A gentler hop() for fast dances: the crouch, the stretch and the landing squash ease in and out, no snap."""
+    pre = bump(t, a - 0.06, a + 0.01)
+    p["sy"] -= 0.08 * pre
+    p["sx"] += 0.025 * pre                # the big tail is near the edge: widen only a little
+    if a < t < b:
+        x = (t - a) / (b - a)
+        p["dy"] -= height * 4 * x * (1 - x)
+        st = 0.04 * math.sin(math.pi * x)
+        p["sy"] += st
+        p["sx"] -= 0.6 * st
+        p["ear_out"] -= 6 * st / 0.04 * (1 - x)
+    land = bump(t, b - 0.015, b + 0.09)
+    p["sy"] -= 0.08 * land
+    p["sx"] += 0.03 * land
+    p["ear_out"] += 6 * land
+
+
 def hop_dy(t, a, b, height):
     """The vertical part of hop() alone, for springs (tail/head inertia)."""
     if a < t < b:
@@ -408,6 +427,9 @@ def default_pose():
         feet_dy=(0.0, 0.0),          # lift of the left / right front paw (stepping)
         tail_scale=1.0,              # tail length (shrinks toward its base)
         heart=0.0,                   # 0..1 the silhouette morphs into a big heart (see draw_heart_body)
+        # --- wave 5 (defaults keep the drawing unchanged)
+        morph="heart",               # what `heart` morphs into: "heart" or "cloud" (the 1 % goodbye)
+        fade=0.0,                    # 0..1 the whole character fades out (the cloud dissolves)
     )
 
 
@@ -606,9 +628,12 @@ def draw_character(pose):
     # ---- ears (the nearer one last; from behind their backs show, without the pink inside)
     es = pose["ear_scale"]
     ear_in = 0.0
+    ear_op = 1.0
     if heart:                                       # the ears lean together and sink into the lobes
         es *= 1 - 0.85 * ramp(heart, 0.05, 0.8)
         ear_in = 14 * heart
+        if pose["morph"] == "cloud":                # ...or melt into the cloud, which has no lobes to hide them
+            ear_op = 1 - ramp(heart, 0.15, 0.55)
     ear_w = 0.4 + 0.6 * abs(th.c) if th.on else 1.0
     inner_op = ramp(th.c, -0.1, 0.3) if th.on else 1.0
     sides = (-1, 1)
@@ -625,11 +650,13 @@ def draw_character(pose):
             ear_tf = ear_tf @ Tf.scale(ear_w, 1, bx, 36)
         outer = chaikin([(bx - side * 14, 40), (bx + side * 9, 6), (bx + side * 13, 40)], 3)
         inner = chaikin([(bx - side * 7, 37), (bx + side * 8, 13), (bx + side * 9, 37)], 3)
+        if ear_op <= 0.01:
+            continue
         ear_mask = Canvas.poly_mask(outer, ear_tf)
-        cv.paint_gradient(ear_mask, ORANGE_TOP, ORANGE_BOT, g(6 + grad_dy), g(40 + grad_dy))
-        cv.paint(clip(Canvas.poly_mask(inner, ear_tf), ear_mask), EAR_INNER, inner_op)
+        cv.paint_gradient(ear_mask, ORANGE_TOP, ORANGE_BOT, g(6 + grad_dy), g(40 + grad_dy), ear_op)
+        cv.paint(clip(Canvas.poly_mask(inner, ear_tf), ear_mask), EAR_INNER, inner_op * ear_op)
         tip = Canvas.poly_mask(ellipse_pts(bx + side * 8, 12, 8, 7), ear_tf)
-        cv.paint(clip(tip, ear_mask), PAW, 0.9)
+        cv.paint(clip(tip, ear_mask), PAW, 0.9 * ear_op)
 
     # ---- head
     head_mask = Canvas.poly_mask(ellipse_pts(64, 58, th.radius(40, 34), 33), head_tf)
@@ -704,7 +731,7 @@ def draw_character(pose):
 
     for prop in pose["props"]:
         if not prop.get("back") and not prop.get("front"):
-            draw_prop(cv, prop, body_tf)
+            draw_prop(cv, prop, body_tf, head_tf)
 
     for arm in arms:
         if arm not in far_arms:
@@ -715,6 +742,8 @@ def draw_character(pose):
             draw_prop(cv, prop, body_tf)
 
     out = cv.outlined(1.4)
+    if pose["fade"] > 0:
+        out.putalpha(out.getchannel("A").point(lambda v: int(v * (1 - clamp(pose["fade"])))))
     for extra in pose["extras"]:
         draw_extra(out, extra)
     return out
@@ -725,6 +754,22 @@ HEART_SIZE = 50
 HEART_TOP = (255, 150, 112)
 HEART_BOT = (246, 86, 128)
 MORPH_RAYS = 180
+
+
+CLOUD_TOP = (255, 255, 255)
+CLOUD_BOT = (222, 230, 246)
+CLOUD_SHADE = (204, 214, 236)
+# The cloud the fox curls into (body space): puffs as (x, y, r); flat-ish bottom, round top.
+CLOUD_PUFFS = ((38, 96, 17), (54, 80, 20), (76, 78, 21), (92, 95, 17), (64, 101, 22), (48, 104, 15), (82, 105, 15))
+CLOUD_SHADES = ((50, 112, 18, 5), (80, 113, 16, 5), (66, 90, 6, 3))
+
+
+def cloud_mask(tf):
+    """A fluffy cloud of round puffs (body space) as one mask."""
+    mask = Canvas.new_mask()
+    for x, y, r in CLOUD_PUFFS:
+        Canvas.poly_mask(ellipse_pts(x, y, r, r), tf, mask)
+    return mask
 
 
 def _radial_extent(mask, centre, angles):
@@ -748,8 +793,10 @@ def draw_heart_body(cv, pose, body_tf, part_tf, head_mask, body_mask, g, feet):
     caller), the paws tuck in. Returns the silhouette mask (the face details are clipped to it).
     """
     m = clamp(pose["heart"])
+    cloud = pose["morph"] == "cloud"
     union = ImageChops.lighter(head_mask, body_mask)
-    heart_mask = Canvas.poly_mask(heart_pts(*HEART_CENTRE, HEART_SIZE), body_tf)
+    heart_mask = cloud_mask(body_tf) if cloud else Canvas.poly_mask(heart_pts(*HEART_CENTRE, HEART_SIZE), body_tf)
+    top, bot = (CLOUD_TOP, CLOUD_BOT) if cloud else (HEART_TOP, HEART_BOT)
     c = body_tf.apply([(64, 86)])[0] * SS
     angles = np.linspace(0, 2 * math.pi, MORPH_RAYS, endpoint=False)
     r = (1 - m) * _radial_extent(union, c, angles) + m * _radial_extent(heart_mask, c, angles)
@@ -764,8 +811,13 @@ def draw_heart_body(cv, pose, body_tf, part_tf, head_mask, body_mask, g, feet):
     cv.paint(clip(below, Canvas.poly_mask(ellipse_pts(64, 88, 30, 8), part_tf)), ORANGE_SHADE, 0.45 * (1 - m))
     cv.paint(clip(clip(Canvas.poly_mask(ellipse_pts(64, 108, 15, 13), part_tf), body_mask), below), CREAM,
              1 - ramp(m, 0.0, 0.6))
-    cv.paint_gradient(blob, HEART_TOP, HEART_BOT, g(30 + dy), g(118 + dy), smooth(m))
-    if m > 0:
+    cv.paint_gradient(blob, top, bot, g(30 + dy), g(118 + dy), smooth(m))
+    if m > 0 and cloud:
+        for x, y, rx, ry in CLOUD_SHADES:              # soft shading between the puffs
+            cv.paint(clip(Canvas.poly_mask(ellipse_pts(x, y, rx, ry), body_tf), blob), CLOUD_SHADE, 0.55 * m)
+        shine = Canvas.poly_mask(ellipse_pts(46, 66, 10, 5, -20), body_tf)
+        cv.paint(clip(shine, blob), WHITE, 0.7 * m)
+    elif m > 0:
         shine = Canvas.poly_mask(ellipse_pts(38, 44, 9, 4.5, -38), body_tf)
         cv.paint(clip(shine, blob), WHITE, 0.45 * m)
     # paws tuck into the heart's tip
@@ -1171,19 +1223,177 @@ def _prop_guitar(cv, pr, tf, body_tf, lb):
         cv.paint(Canvas.stroke_mask([(8, sy), (-41, sy * 0.8)], 0.45, tf), STRING, 0.9)
 
 
+# ---- wave 5 props: bayan, balalaika, mohawk, battery
+
+BAYAN_RED = (164, 36, 48)
+BAYAN_DARK = (104, 20, 32)
+BAYAN_GOLD = (240, 200, 116)
+BUTTON = (252, 248, 238)
+BELLOWS_DARK = (58, 52, 70)
+BELLOWS_LIGHT = (232, 222, 206)
+BAYAN_H = 25.0                 # height of the bellows (the blocks are a little taller)
+BAYAN_BLOCK = 11.0             # width of each block
+BAYAN_FOLDS = 8
+
+
+def bayan_edges(pr):
+    """
+    Bellows of the bayan (local coords; origin = inner edge of the right, keyboard block): x of the left edge
+    at the top and at the bottom. `open` 0…1 pulls it out, `fan` makes the top open wider than the bottom —
+    a real bayan opens like a fan, the left (bass) hand drawing an arc.
+    """
+    o, fan = pr.get("open", 0.5), pr.get("fan", 0.0)
+    return -(5 + 18 * o * (1 + fan)), -(5 + 18 * o * (1 - fan))
+
+
+def bayan_left_grip(pr):
+    """Centre of the left (bass) block in local coords: where the left paw holds it."""
+    xt, xb = bayan_edges(pr)
+    h = BAYAN_H / 2
+    ex, ey = xt - xb, -2 * h                   # inner edge, bottom → top
+    ln = math.hypot(ex, ey)
+    nx, ny = ey / ln, -ex / ln                 # its normal, pointing away from the bellows (left)
+    if nx > 0:
+        nx, ny = -nx, -ny
+    return (xt + xb) / 2 + nx * BAYAN_BLOCK / 2, ny * BAYAN_BLOCK / 2
+
+
+def _prop_bayan(cv, pr, tf, body_tf, lb):
+    """Button accordion: the right block (keyboard) stays, the left one (bass) moves; the folded bellows between."""
+    xt, xb = bayan_edges(pr)
+    h = BAYAN_H / 2
+    # bellows: pleats between the two inner edges; their rims zig-zag like real folds
+    for j in range(BAYAN_FOLDS):
+        u0, u1 = j / BAYAN_FOLDS, (j + 1) / BAYAN_FOLDS
+        bulge0 = 1.3 if j % 2 else 0.0
+        bulge1 = 0.0 if j % 2 else 1.3
+        quad = [(lerp(xt, 0, u0), -h - bulge0), (lerp(xt, 0, u1), -h - bulge1),
+                (lerp(xb, 0, u1), h + bulge1), (lerp(xb, 0, u0), h + bulge0)]
+        cv.paint(Canvas.poly_mask(quad, tf), BELLOWS_LIGHT if j % 2 else BELLOWS_DARK)
+        if j % 2 == 0:                          # the shadow inside each fold
+            cv.paint(Canvas.stroke_mask([(lerp(xt, 0, u1), -h - bulge1), (lerp(xb, 0, u1), h + bulge1)], 0.6, tf),
+                     (30, 26, 40), 0.7)
+    for y in (-h - 0.6, h + 0.6):                # corner tape along the rims
+        cv.paint(Canvas.stroke_mask([(xt if y < 0 else xb, y), (0, y)], 1.0, tf), STEEL, 0.9)
+    # right block with the melody buttons
+    rb = _rect_pts(BAYAN_BLOCK / 2, 0, BAYAN_BLOCK, BAYAN_H + 4, 0, 1)
+    cv.paint(Canvas.poly_mask(rb, tf), BAYAN_RED)
+    cv.paint(Canvas.stroke_mask([(0.8, -h - 1.2), (0.8, h + 1.2)], 0.9, tf), BAYAN_GOLD)
+    for col, cx in enumerate((3.2, 5.9, 8.6)):
+        for r in range(6):
+            cy = -10.5 + r * 4.0 + (1.4 if col == 1 else 0)
+            cv.paint(Canvas.poly_mask(ellipse_pts(cx, cy, 1.0, 1.0), tf), BUTTON)
+    cv.paint(Canvas.poly_mask(ellipse_pts(5, -h - 0.2, 3, 0.9), tf), WHITE, 0.4)
+    # left block (bass), turned with the edge of the bellows
+    gx, gy = bayan_left_grip(pr)
+    ang = math.degrees(math.atan2(-(xt - xb), 2 * h))
+    lb_pts = _rect_pts(gx, gy, BAYAN_BLOCK, BAYAN_H + 4, -ang, 1)
+    cv.paint(Canvas.poly_mask(lb_pts, tf), BAYAN_RED)
+    rot = Tf.rotate(-ang, gx, gy)
+    for k in range(4):
+        bx, by = rot.apply([(gx - 1.5, gy - 6 + k * 4)])[0]
+        cv.paint(Canvas.poly_mask(ellipse_pts(bx, by, 0.9, 0.9), tf), BUTTON)
+    strap = rot.apply([(gx + 2.6, gy - h - 1), (gx + 2.6, gy + h + 1)])
+    cv.paint(Canvas.stroke_mask([tuple(strap[0]), tuple(strap[1])], 1.6, tf), BAYAN_DARK)
+    edge = rot.apply([(gx + BAYAN_BLOCK / 2 - 0.8, gy - h - 1.2), (gx + BAYAN_BLOCK / 2 - 0.8, gy + h + 1.2)])
+    cv.paint(Canvas.stroke_mask([tuple(edge[0]), tuple(edge[1])], 0.9, tf), BAYAN_GOLD)
+
+
+BALA_TOP = (248, 216, 150)
+BALA_RIB = (184, 98, 42)
+BALA_GUARD = (76, 40, 28)
+BALA_FRETS = (-19, -24, -29, -34, -39)
+
+
+def _prop_balalaika(cv, pr, tf, body_tf, lb):
+    """Balalaika: a triangular body (the sound hole is the origin), the neck runs along -x to the headstock."""
+    outer = chaikin([(-17, 0), (12, -16.5), (16, 0), (12, 16.5)], 1)
+    body = Canvas.poly_mask(outer, tf)
+    cv.paint(body, BALA_RIB)
+    for k in (-8, -2.5, 3, 8.5):                 # the staves of the back show along the rim
+        cv.paint(clip(Canvas.stroke_mask([(-15, 0), (15.5, k)], 0.5, tf), body), (150, 76, 30), 0.8)
+    top = Canvas.poly_mask(chaikin([(-14, 0), (11, -14), (14, 0), (11, 14)], 1), tf)
+    cv.paint(top, BALA_TOP)
+    cv.paint(clip(Canvas.poly_mask(ellipse_pts(-2, -5, 7, 2.2, -28), tf), top), WHITE, 0.35)
+    guard = chaikin([(0.5, -5), (5.5, -6.5), (4, 0), (5.5, 6.5), (0.5, 5), (2, 0)], 2)
+    cv.paint(Canvas.poly_mask(guard, tf), BALA_GUARD, 0.85)
+    cv.paint(Canvas.poly_mask(ellipse_pts(-5, 0, 2.8, 2.8), tf), BALA_RIB)
+    cv.paint(Canvas.poly_mask(ellipse_pts(-5, 0, 2.1, 2.1), tf), (60, 34, 20))
+    cv.paint(Canvas.poly_mask(_rect_pts(10.5, 0, 1.6, 7, 0, 1), tf), (92, 54, 30))       # bridge
+    cv.paint(Canvas.poly_mask(_rect_pts(-29, 0, 30, 3.8, 0, 1), tf), NECK_WOOD)
+    for fx in BALA_FRETS:
+        cv.paint(Canvas.stroke_mask([(fx, -1.7), (fx, 1.7)], 0.55, tf), (214, 196, 170), 0.9)
+    head = chaikin([(-43, -2.2), (-52, -3.4), (-52, 3.4), (-43, 2.2)], 1)
+    cv.paint(Canvas.poly_mask(head, tf), (96, 56, 32))
+    for px, py in ((-46, -3.8), (-50, -3.9), (-48, 3.9)):
+        cv.paint(Canvas.poly_mask(ellipse_pts(px, py, 1.1, 1.1), tf), STEEL)
+    for sy in (-1.0, 0.0, 1.0):
+        cv.paint(Canvas.stroke_mask([(10.5, sy * 1.2), (-44, sy * 0.7)], 0.45, tf), STRING, 0.9)
+
+
+MOHAWK_TIP = (255, 120, 200)
+MOHAWK_BASE = (226, 40, 150)
+# Spikes of the mohawk (local coords on the head, origin = top of the head): base x, lean (deg), height.
+MOHAWK_SPIKES = ((-10, -26, 15), (-5, -12, 19), (0, 0, 21.5), (5, 12, 19), (10, 26, 15))
+
+
+def _prop_mohawk(cv, pr, tf, body_tf, lb):
+    """Punk mohawk standing up from the top of the head; `grow` 0…1 raises the spikes one after another, `bend` sways them."""
+    grow, bend = pr.get("grow", 1.0), pr.get("bend", 0.0)
+    n = len(MOHAWK_SPIKES)
+    mask = Canvas.new_mask()
+    tips = []
+    for k, (bx, lean, hgt) in enumerate(MOHAWK_SPIKES):
+        g = smooth(clamp(grow * 1.6 - abs(k - n // 2) * 0.22))   # the middle first, then outward
+        if g <= 0.01:
+            continue
+        a = math.radians(lean + bend * (0.6 + 0.4 * hgt / 21.5))
+        by = 3 + 0.05 * bx * bx                  # the base follows the round top of the head
+        tip = (bx + math.sin(a) * hgt * g, by - math.cos(a) * hgt * g)
+        w = 4.2
+        side = (math.cos(a) * w, math.sin(a) * w)
+        mid = (bx + math.sin(a) * hgt * g * 0.55 - side[0] * 0.25, by - math.cos(a) * hgt * g * 0.55 - side[1] * 0.25)
+        spike = chaikin([(bx - side[0], by - side[1]), mid, tip, (bx + side[0], by + side[1]), (bx, by + 4)], 2)
+        Canvas.poly_mask(spike, tf, mask)
+        tips.append(tip)
+    if not tips:
+        return
+    ys = [float(tf.apply([t])[0][1]) for t in tips]
+    base_y = float(tf.apply([(0, 6)])[0][1])
+    cv.paint_gradient(mask, MOHAWK_TIP, MOHAWK_BASE, min(ys), base_y)
+    shine = Canvas.stroke_mask([(-0.8, 4), (-0.8 + math.sin(math.radians(bend)) * 9 * grow, 4 - 11 * grow)], 1.0, tf)
+    cv.paint(clip(shine, mask), WHITE, 0.45)
+
+
+def _prop_battery(cv, pr, tf, body_tf, lb):
+    """A battery held in the paws (the centre is the origin): the red charge bar blinks with `blink`."""
+    w, h = 24.0, 12.0
+    cv.paint(Canvas.poly_mask(_rect_pts(0, 0, w, h, 0, 1), tf), (60, 64, 80))
+    cv.paint(Canvas.poly_mask(_rect_pts(w / 2 + 1.6, 0, 3.2, 5.4, 0, 1), tf), (60, 64, 80))
+    cv.paint(Canvas.poly_mask(_rect_pts(0, 0, w - 4, h - 4, 0, 1), tf), WHITE)
+    level = clamp(pr.get("level", 0.08))
+    fill = max(1.4, (w - 6) * level)
+    bar = _rect_pts(-(w - 6) / 2 + fill / 2, 0, fill, h - 6, 0, 1)
+    cv.paint(Canvas.poly_mask(bar, tf), (236, 56, 48), 0.25 + 0.75 * clamp(pr.get("blink", 1.0)))
+    cv.paint(Canvas.poly_mask(ellipse_pts(-4, -4.2, 6, 1.0), tf), WHITE, 0.5)
+
+
 PROPS = {
     "wheel": _prop_wheel, "wrench": _prop_wrench, "map": _prop_map, "tire": _prop_tire,
     "belt": _prop_belt, "nozzle": _prop_nozzle, "hose": _prop_hose, "sponge": _prop_sponge,
     "flag": _prop_flag, "mic": _prop_mic, "guitar": _prop_guitar,
+    "bayan": _prop_bayan, "balalaika": _prop_balalaika, "mohawk": _prop_mohawk, "battery": _prop_battery,
 }
 
 
-def draw_prop(cv, prop, body_tf):
+def draw_prop(cv, prop, body_tf, head_tf=None):
     op = prop.get("opacity", 1.0)
     if op <= 0.01 or prop.get("scale", 1.0) <= 0.01:
         return
     lb = _local(prop)
     base = FIT if prop.get("ground") else body_tf      # a ground prop does not lean or jump with the body
+    if prop.get("head") and head_tf is not None:
+        base = head_tf                                 # on the head (the mohawk): tilts and bobs with it
     layer = Canvas()
     PROPS[prop["kind"]](layer, prop, base @ lb, base, lb)
     img = layer.outlined(1.0)
@@ -1295,6 +1505,12 @@ def draw_extra(img, e):
         layer = _sticker([chaikin(pts, 1)], (70, 190, 110), opacity=op, out_px=1.3)
     elif kind == "psign":
         layer = _psign(x, y, s, op)
+    elif kind == "bolt":
+        r = math.radians(e.get("rot", 0.0))
+        c, si = math.cos(r), math.sin(r)
+        pts = [(-1.5, -9), (4.5, -9), (1, -2), (5, -2), (-3.5, 9), (-1, 1), (-5, 1)]
+        bolt = [(x + (px * c - py * si) * s, y + (px * si + py * c) * s) for px, py in pts]
+        layer = _sticker([bolt], (255, 214, 40), opacity=op, out_px=1.2)
     else:
         return
     img.alpha_composite(layer)
@@ -3384,6 +3600,359 @@ def tail_back(i, n):
     return p
 
 
+# ---- wave 5: music shows (bayan, balalaika, punk), the battery, the car leans
+# Same rules as wave 4: start and end in the calm pose, props pop in and out while the paws lift and lower.
+
+BAYAN_AT = (80, 98)            # inner edge of the keyboard block, body space
+BAYAN_TUNE = ((0, 0), (1, 1), (2, 2), (1, 3), (0, 2), (2, 1), (1, 0), (2, 3))   # (column, row) of the buttons
+
+
+def bayan(i, n):
+    """A bayan appears; the left paw draws the bellows out and in like a fan, the right paw plays the buttons; sways and sings, puts it away."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    hold = window(t, 0.03, 0.14, 0.86, 0.97, ease_in_out)
+    s = pop_in_out(t, 0.03, 0.11, 0.87, 0.94)
+    play = window(t, 0.15, 0.21, 0.78, 0.85, ease_in_out)
+    # One bar of a waltz per bellows stroke: out for 1.4 s, in for 1.4 s; it opens wider at the top.
+    ph = 2 * math.pi * max(0.0, t - 0.15) * secs / 2.8
+    stroke = -math.cos(ph)                               # -1 closed … 1 drawn out
+    lift = keys(t, [(0.05, 0.0), (0.15, 1.0), (0.85, 1.0), (0.93, 0.0)])
+    sway = math.sin(ph) * play
+    b = dict(kind="bayan", x=BAYAN_AT[0] - 1.0 * sway, y=lerp(101, BAYAN_AT[1], lift),
+             rot=-2.5 * sway, scale=1.25 * s, open=0.12 + play * (0.4 + 0.33 * stroke),
+             fan=play * (0.18 + 0.16 * stroke))
+    if s > 0.01:
+        p["props"] = [b]
+    # the right paw walks over the buttons, one per 0.35 s
+    step = max(0.0, t - 0.2) * secs / 0.35
+    c0, c1 = BAYAN_TUNE[int(step) % len(BAYAN_TUNE)], BAYAN_TUNE[(int(step) + 1) % len(BAYAN_TUNE)]
+    k = smooth((step % 1 - 0.75) / 0.25)
+    col, row = lerp(c0[0], c1[0], k), lerp(c0[1], c1[1], k)
+    press = 0.6 * math.exp(-(step % 1) * 6) * play
+    # the paw wraps round the outer edge of the keyboard; the fingers walk up and down the button rows
+    keys_pt = prop_at(b, (BAYAN_BLOCK - 2 + 0.6 * col * play, -5.5 + 3.4 * row * play + press))
+    p["arm"] = raised(paw(-1, prop_at(b, bayan_left_grip(b)), hold), paw(1, keys_pt, hold))
+    p["lean"] = -3 * sway
+    p["dx"] = -1.2 * sway
+    p["head_tilt"] = 6 * math.sin(ph + 0.6) * play
+    p["head_dy"] = 1.2 * play
+    p["ear_l"] = 5 * math.sin(ph + 1.0) * play
+    p["ear_r"] = 5 * math.sin(ph + 1.0) * play + ear_flick(t, 0.12, amp=8)
+    singing = 0.3 < t < 0.72
+    syl = int(max(0.0, t - 0.3) * secs / 0.42)
+    p["eyes"] = "closed" if 0.22 < t < 0.76 else ("happy" if 0.76 <= t < 0.84 else "open")
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.04)
+    if singing:
+        p["mouth"] = ("o", "aa", "o", "smile")[syl % 4]
+        p["mouth_open"] = 0.5 + 0.4 * math.sin(math.pi * ((max(0.0, t - 0.3) * secs / 0.42) % 1))
+    else:
+        p["mouth"] = "smile" if hold > 0.5 else "w"
+    p["blush"] = 0.5 + 0.3 * play
+    p["tail"] = 6 * math.sin(ph * 2) * play + 3 * math.sin(2 * math.pi * t)
+    ex = []
+    for d, x0, col_ in ((0.26, 110, NOTE_COLORS[2]), (0.42, 104, NOTE_COLORS[0]), (0.58, 112, NOTE_COLORS[1])):
+        f = _floating(t, "note", x0, 46, rise=26, delay=d, life=0.22, size=0.8, drift=3, color=col_)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((20, 44, 0.77), (108, 30, 0.79)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=5, delay=d, life=0.12, size=0.9, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+BALA_AT = (68, 100)
+BALA_ROT = 28
+BALA_CHORDS = (-22, -27, -31, -36)
+
+
+def balalaika(i, n):
+    """A balalaika appears; one paw moves along the neck, the other plucks and trembles over the strings; bounces to the tune, a final flourish."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    hold = window(t, 0.04, 0.14, 0.84, 0.95, ease_in_out)
+    s = pop_in_out(t, 0.03, 0.1, 0.86, 0.93)
+    play = window(t, 0.16, 0.2, 0.72, 0.76)
+    final = window(t, 0.75, 0.78, 0.81, 0.86, ease_in_out)
+    lift = keys(t, [(0.06, 0.0), (0.16, 1.0), (0.84, 1.0), (0.92, 0.0)])
+    beat = (max(0.0, t - 0.16) * secs / 0.5) % 1                # a beat every 0.5 s
+    bounce = math.sin(math.pi * beat) * play
+    bl = dict(kind="balalaika", x=BALA_AT[0], y=lerp(101, BALA_AT[1], lift) - 1.2 * bounce - 1.5 * final,
+              rot=BALA_ROT + 4 * final + 2 * math.sin(2 * math.pi * max(0.0, t - 0.16) * secs / 2), scale=1.2 * s)
+    if s > 0.01:
+        p["props"] = [bl]
+    ci = int(max(0.0, t - 0.16) * secs / 0.5)
+    cph = (max(0.0, t - 0.16) * secs / 0.5) % 1
+    fret = lerp(BALA_CHORDS[ci % 4], BALA_CHORDS[(ci + 1) % 4], smooth((cph - 0.8) / 0.2))
+    neck = prop_at(bl, (fret, 0.4))
+    # Plucking: a single pluck on the beat, then a fast tremolo over the strings (the balalaika's sound).
+    tremolo = math.sin(2 * math.pi * max(0.0, t - 0.16) * secs * 4.5) * window(cph, 0.35, 0.45, 0.85, 0.95)
+    pluck = -2.5 * math.exp(-cph * 7)
+    string_pt = prop_at(bl, (7.5 + 0.6 * tremolo, -0.5 + (1.8 * tremolo + pluck) * play - 7 * final))
+    up = window(t, 0.8, 0.82, 0.85, 0.89, ease_out)
+    picker = (lerp(string_pt[0], 104, up), lerp(string_pt[1], 64, up))
+    p["arm"] = raised(paw(-1, neck, hold), paw(1, picker, hold))
+    p["dy"] = -1.6 * bounce
+    p["sy"] *= 1 - 0.03 * math.exp(-beat * 6) * play
+    p["head_dy"] = 1.2 * math.exp(-beat * 5) * play
+    p["head_tilt"] = 6 * math.sin(2 * math.pi * max(0.0, t - 0.16) * secs / 2) * play - 6 * final
+    p["lean"] = 2 * math.sin(2 * math.pi * max(0.0, t - 0.16) * secs / 2) * play - 3 * final
+    wink = window(t, 0.46, 0.48, 0.54, 0.56)
+    p["eyes"] = "happy" if (play > 0.5 and not 0.44 < t < 0.58) or final > 0.3 else "open"
+    p["eye_l"] = "happy" if wink > 0.5 else None
+    p["look"] = (-0.5 * hold * (1 - play), 0.8 * hold * (1 - final) * (1 - play))
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.04)
+    p["mouth"] = "open" if final > 0.3 or wink > 0.5 else ("smile" if play > 0.3 else "w")
+    p["mouth_open"] = 0.8
+    p["ear_out"] = 3 * play - 6 * final
+    p["ear_l"] = 4 * bounce
+    p["ear_r"] = 4 * bounce
+    p["blush"] = 0.5 + 0.25 * play + 0.2 * final
+    p["tail"] = 7 * math.sin(2 * math.pi * t * 5) * (0.3 + 0.7 * play) + 10 * final
+    ex = []
+    for d, x0, col in ((0.22, 106, NOTE_COLORS[1]), (0.36, 112, NOTE_COLORS[0]), (0.5, 104, NOTE_COLORS[2]),
+                       (0.62, 110, NOTE_COLORS[1])):
+        f = _floating(t, "note", x0, 50, rise=28, delay=d, life=0.2, size=0.75, drift=3, color=col)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((110, 48, 0.8), (98, 28, 0.82), (118, 70, 0.84)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=5, delay=d, life=0.12, size=1.0, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+PUNK_BEAT = 0.48               # s per beat of the rock tune
+
+
+def punk(i, n):
+    """A pink mohawk shoots up, a rock dance: head-banging on the beat, a raised paw, two jumps; the mohawk sinks back and it calms down."""
+    t = i / n
+    secs = _secs(n)
+    p = default_pose()
+    breathe(p, t, 0.5)
+    grow = keys(t, [(0.04, 0.0), (0.16, 1.0), (0.84, 1.0), (0.95, 0.0)], ease_out)
+    rock = window(t, 0.17, 0.22, 0.78, 0.84, ease_in_out)
+    tt = max(0.0, t - 0.17) * secs / PUNK_BEAT
+    beat = tt % 1
+    hit = smooth(beat / 0.25) * math.exp(-max(0.0, beat - 0.25) * 5)   # a quick drop on the beat, a slower rise
+    bang = hit * rock                                    # the head drops on the beat and comes back up
+    side = math.sin(math.pi * tt / 2) * rock             # sways left / right every two beats
+    p["head_dy"] = 3 * bang
+    p["head_tilt"] = 7 * side
+    p["lean"] = 3 * side
+    p["dx"] = -1.5 * max(0.0, side)                     # leaning right, the tail would leave the frame
+    p["sy"] *= 1 - 0.035 * bang
+    p["sx"] *= 1 + 0.02 * bang
+    for a, b_ in ((0.41, 0.51), (0.59, 0.69)):
+        soft_hop(p, t, a, b_, 5)
+    p["dy"] -= 1.0 * rock                                 # stamping and swaying: keep the paws in the frame
+    # the right paw goes up in a "rock on" and pumps on the beat; the left one plays air guitar
+    up = window(t, 0.2, 0.26, 0.74, 0.8, ease_in_out)
+    pump = 5 * hit * rock
+    air = math.sin(2 * math.pi * tt * 2) * rock
+    p["arm"] = raised(paw(1, (100, 58 + pump), up), paw(-1, (52 + 3 * air, 100 + 2 * air), up))
+    # the mohawk lags behind the head and springs back
+    head_x = lambda u: 7 * math.sin(math.pi * max(0.0, u - 0.17) * secs / PUNK_BEAT / 2) * window(u, 0.17, 0.22, 0.78, 0.84, ease_in_out)
+    bend = -1.2 * lag(head_x, t, secs, freq=2.6, zeta=0.3)
+    if grow > 0.01:
+        p["props"] = [dict(kind="mohawk", head=True, x=64, y=27, grow=grow, bend=bend + 4 * side, scale=1.0)]
+    p["eyes"] = ("squeeze" if 0.12 < beat < 0.45 else "grumpy") if rock > 0.5 else ("wide" if 0.06 < t < 0.16 else "open")
+    p["open"] = 1 - blink_shut(t, 0.9, "single", 0.04)
+    p["mouth"] = "open" if rock > 0.5 and 0.12 < beat < 0.6 else ("smile" if rock > 0.3 or 0.84 < t < 0.92 else ("o" if 0.06 < t < 0.16 else "w"))
+    p["mouth_open"] = 0.6 + 0.4 * bang
+    p["tongue"] = 0.7 * window(t, 0.3, 0.32, 0.36, 0.38)
+    p["ear_out"] = 8 * bang - 3 * rock
+    p["ear_l"] = 6 * side + ear_flick(t, 0.05, amp=10)
+    p["ear_r"] = 6 * side
+    p["blush"] = 0.4 + 0.2 * rock
+    p["tail"] = 11 * math.sin(math.pi * tt) * rock + 4 * math.sin(2 * math.pi * t)
+    ex = []
+    for k in range(int(0.6 * secs / PUNK_BEAT) + 1):
+        d = 0.22 + k * PUNK_BEAT / secs
+        x0 = 18 if k % 2 else 110
+        f = _floating(t, "bolt", x0, 40 + 8 * (k % 3), rise=6, delay=d, life=0.1, size=0.9, drift=0, rot=12 if k % 2 else -12)
+        if f:
+            ex.append(f)
+    for sx_, sy_, d in ((40, 18, 0.12), (88, 16, 0.14)):
+        f = _floating(t, "sparkle", sx_, sy_, rise=4, delay=d, life=0.1, size=0.8, drift=0, rot=90 * t)
+        if f:
+            ex.append(f)
+    for d, x0, col in ((0.3, 22, NOTE_COLORS[2]), (0.55, 108, NOTE_COLORS[0])):
+        f = _floating(t, "note", x0, 70, rise=24, delay=d, life=0.2, size=0.8, drift=3, color=col)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def battery_sad(i, n):
+    """Ears drooping, holds an almost empty battery and looks at it; the red bar blinks, a gentle shake does not help, a sigh, a tear; puts it away."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.6)
+    sad = window(t, 0.04, 0.16, 0.86, 0.97, ease_in_out)
+    hold = window(t, 0.05, 0.15, 0.84, 0.95, ease_in_out)
+    s = pop_in_out(t, 0.05, 0.13, 0.85, 0.92)
+    look = window(t, 0.16, 0.26, 0.5, 0.58, ease_in_out)
+    shake = math.sin(2 * math.pi * t * 18) * window(t, 0.36, 0.39, 0.47, 0.5)
+    sigh = window(t, 0.56, 0.62, 0.7, 0.8, ease_in_out)
+    hug = window(t, 0.7, 0.76, 0.84, 0.9, ease_in_out)
+    cx = 64 + 2.2 * shake
+    cy = 99 - 8 * look + 2 * hug + 2 * sigh
+    bat = dict(kind="battery", x=cx, y=cy, rot=7 * shake - 3 * look, scale=1.4 * s, level=0.12,
+               blink=1.0 if (i // 5) % 2 == 0 else 0.0)
+    if s > 0.01:
+        p["props"] = [bat]
+    # held from below, so the whole battery and its nearly empty bar stay in sight
+    p["arm"] = raised(paw(-1, prop_at(bat, (-9.5, 9.5)), hold), paw(1, prop_at(bat, (9.5, 9.5)), hold))
+    p["sy"] *= 1 - 0.04 * sad - 0.04 * sigh
+    p["sx"] *= 1 + 0.02 * sad
+    p["head_dy"] = 2.5 * sad + 2 * sigh
+    p["head_tilt"] = -4 * sad + 3 * look
+    p["ear_out"] = 20 * sad
+    p["ear_scale"] = 1 - 0.14 * sad
+    p["ear_l"] = -4 * sigh
+    p["ear_r"] = 4 * sigh
+    p["tail"] = -12 * sad
+    p["tail_curl"] = 0.35 * sad
+    p["eyes"] = "closed" if 0.6 < t < 0.7 else "open"
+    p["open"] = 1 - 0.3 * sad - blink_shut(t, 0.32, "slow", 0.04) - 0.3 * blink_shut(t, 0.8, "half", 0.05)
+    p["look"] = (0.0, 1.0 * look + 0.4 * hug)
+    p["mouth"] = "frown" if sad > 0.3 else "w"
+    p["blush"] = 0.25
+    ex = []
+    tear = clamp((t - 0.62) / 0.2)
+    if 0 < tear < 1:
+        ex.append(dict(kind="drop", x=43 - 1.5 * tear, y=77 + 9 * tear, scale=0.7,
+                       opacity=ramp(tear, 0, 0.15) * (1 - ramp(tear, 0.75, 1.0))))
+    sw = clamp((t - 0.36) / 0.16)
+    if 0 < sw < 1:
+        ex.append(dict(kind="sweat", x=100, y=34 + 6 * sw, scale=0.8, opacity=ramp(sw, 0, 0.2) * (1 - ramp(sw, 0.7, 1.0))))
+    p["extras"] = ex
+    return p
+
+
+def cloud_farewell(i, n):
+    """Closes its eyes and curls up, turns into a fluffy cloud with a sleepy smile, floats up a little and melts away."""
+    t = i / n
+    p = default_pose()
+    breathe(p, t, 0.5)
+    curl = window(t, 0.04, 0.18, 2.0, 3.0, ease_in_out)          # holds till the end: the fox is gone
+    m = keys(t, [(0.16, 0.0), (0.5, 1.0)])
+    hug = window(t, 0.05, 0.17, 2.0, 3.0, ease_in_out)
+    p["morph"] = "cloud"
+    p["heart"] = m
+    p["sy"] *= 1 - 0.07 * curl
+    p["sx"] *= 1 + 0.03 * curl
+    k = 1 - ramp(m, 0.1, 0.55)
+    if hug > 0.02 and k > 0.03:
+        arms = raised(paw(-1, (52, 96), hug), paw(1, (76, 96), hug)) or []
+        p["arm"] = [dict(a, k=k, x=lerp(64, a["x"], k), y=lerp(98, a["y"], k)) for a in arms] or None
+    p["head_dy"] = 3 * curl + 7 * m                              # the face settles into the middle of the cloud
+    p["head_tilt"] = -5 * curl * (1 - m)
+    p["ear_out"] = 10 * curl
+    p["tail_curl"] = 0.6 * curl
+    p["tail"] = -10 * curl
+    float_up = keys(t, [(0.5, 0.0), (0.97, 1.0)], ease_in)
+    bob = math.sin(2 * math.pi * (t - 0.5) * 2) * window(t, 0.5, 0.58, 0.8, 0.9)
+    p["dy"] = -12 * float_up - 1.5 * bob
+    # gone exactly on the last frame: identical empty frames would be merged by the WebP encoder
+    p["fade"] = keys(t, [(0.66, 0.0), (0.99, 1.0)], ease_in)
+    p["eyes"] = "closed" if t > 0.06 else "open"
+    p["open"] = 1 - blink_shut(t, 0.02, "slow", 0.02)
+    p["mouth"] = "smile" if t > 0.1 else "w"
+    p["blush"] = 0.5 + 0.25 * m
+    ex = []
+    for x0, y0, d, sz in ((26, 96, 0.55, 0.9), (102, 92, 0.6, 1.0), (40, 70, 0.68, 0.8), (90, 64, 0.72, 0.9),
+                          (60, 50, 0.78, 0.8), (76, 84, 0.82, 0.7)):
+        f = _floating(t, "puff", x0, y0, rise=18, delay=d, life=0.14, size=sz, drift=4)
+        if f:
+            ex.append(f)
+    p["extras"] = ex
+    return p
+
+
+def _inertia(kind):
+    """
+    The car pulls the fox one way and it leans with a little delay, then settles back (preview only: not wired
+    to GPS / accelerometer / gyroscope yet). The body follows the push on a spring, the head lags more, the ears
+    and the tail most — so they trail behind and overshoot a little on the way back.
+    """
+    def pose(i, n):
+        t = i / n
+        secs = _secs(n)
+        p = default_pose()
+        breathe(p, t, 0.5)
+        push = lambda u: window(u, 0.08, 0.22, 0.5, 0.72, ease_in_out)
+        body = spring(push, t, secs, freq=1.5, zeta=0.55)
+        head = spring(push, t, secs, freq=1.1, zeta=0.45)
+        soft = spring(push, t, secs, freq=0.85, zeta=0.3)
+        trail = body - soft                                       # > 0 while the soft parts lag behind
+        onset = bump(t, 0.08, 0.3)
+        if kind in ("left", "right"):
+            sd = -1 if kind == "left" else 1
+            p["lean"] = 9 * sd * body
+            # leaning right, the big tail would swing out of the frame: the body shifts back a little instead
+            p["dx"] = (2.5 if sd < 0 else -1.0) * body
+            p["dy"] = -3 * abs(body)                              # lifted a little: the leaning paws stay in the frame
+            p["head_tilt"] = 3 * sd * head - 5 * sd * (body - head)
+            p["ear_l"] = p["ear_r"] = -16 * sd * trail
+            p["tail"] = -14 * sd * trail
+            p["look"] = (0.7 * sd * head, 0.0)
+            p["eyes"] = "open"
+            p["mouth"] = "o" if onset > 0.4 else "w"
+        elif kind == "forward":                                   # braking: pitches toward you
+            p["dy"] = 0.5 * body
+            p["sy"] *= 1 - 0.07 * body
+            p["sx"] *= 1 + 0.06 * body
+            p["head_dy"] = 6 * head
+            p["ear_scale"] = 1 - 0.16 * soft
+            p["ear_out"] = -3 * soft
+            p["ear_l"] = -6 * trail
+            p["ear_r"] = 6 * trail
+            p["tail"] = -16 * trail - 4 * body
+            p["tail_curl"] = 0.3 * soft
+            p["look"] = (0.0, 0.8 * head)
+            p["eyes"] = "wide" if onset > 0.5 else "open"
+            p["mouth"] = "o" if onset > 0.3 else "w"
+        else:                                                     # speeding up: pressed back, enjoys it
+            p["dy"] = -1.5 * body
+            p["sy"] *= 1 - 0.01 * body
+            p["sx"] *= 1 - 0.035 * body
+            p["head_dy"] = -3 * head
+            p["ear_out"] = 14 * soft
+            p["ear_scale"] = 1 - 0.1 * soft
+            p["tail"] = 12 * trail - 5 * body
+            p["look"] = (0.0, -0.5 * head)
+            p["eyes"] = "happy" if 0.3 < t < 0.6 else "open"
+            p["mouth"] = "open" if 0.3 < t < 0.6 else "w"
+            p["mouth_open"] = 0.6
+        p["open"] = 1 - blink_shut(t, 0.86, "single", 0.04)
+        p["blush"] = 0.5
+        return p
+    pose.__doc__ = {
+        "left": "Leans left with the car, a little late; ears and tail trail behind, then it settles back with a small sway.",
+        "right": "Leans right with the car, a little late; ears and tail trail behind, then it settles back with a small sway.",
+        "forward": "Braking: pitches forward toward you, head lags and dips, ears tip forward, tail swings up; settles back.",
+        "back": "Speeding up: pressed back, head tips up, ears blown back, a happy face; settles back.",
+    }[kind]
+    return pose
+
+
+inertia_left = _inertia("left")
+inertia_right = _inertia("right")
+inertia_forward = _inertia("forward")
+inertia_back = _inertia("back")
+
+
 EMOTIONS = {
     # file suffix: (pose function, frame count)
     "idle_small": (idle_small, 60),
@@ -3453,6 +4022,16 @@ EMOTIONS = {
     "microphone": (microphone, 130),
     "guitar": (guitar, 140),
     "tail_back": (tail_back, 140),
+    # wave 5
+    "bayan": (bayan, 140),
+    "balalaika": (balalaika, 140),
+    "punk": (punk, 150),
+    "battery_sad": (battery_sad, 110),
+    "cloud_farewell": (cloud_farewell, 100),
+    "inertia_left": (inertia_left, 60),
+    "inertia_right": (inertia_right, 60),
+    "inertia_forward": (inertia_forward, 60),
+    "inertia_back": (inertia_back, 60),
 }
 
 
@@ -3508,6 +4087,13 @@ CAR = ["driving", "seatbelt", "navigator", "mechanic", "tire_check", "refuel", "
 # Wave 4: the heart, music shows, turning around (shown first in the gallery, checked by test_generate.py).
 WAVE4 = ["heart_transform", "dance_side", "microphone", "guitar", "tail_back"]
 
+# Wave 5: music shows, the battery, the car leans (shown first in the gallery, checked by test_generate.py).
+WAVE5 = ["bayan", "balalaika", "punk", "battery_sad", "cloud_farewell",
+         "inertia_left", "inertia_right", "inertia_forward", "inertia_back"]
+
+# Wave 5 animations that do not end in the calm pose: the fox is gone at the end (the service stops after it).
+ENDS_GONE = ["cloud_farewell"]
+
 # Where each animation is used (see AnimationPools in the app); shown in the gallery.
 USAGE = {
     "driving": "AUTO · CALM while driving", "seatbelt": "AUTO · TRIP_PREPARE",
@@ -3522,6 +4108,10 @@ USAGE = {
     "wake_curled": "WAKE after sleep_curled",
     "heart_transform": "HEARTS after petting, FAREWELL", "dance_side": "MUSIC",
     "microphone": "MUSIC · rare scene", "guitar": "MUSIC · rare scene", "tail_back": "CALM · scene, not while driving",
+    "bayan": "MUSIC · rare scene", "balalaika": "MUSIC · rare scene", "punk": "MUSIC · rare scene, not while driving",
+    "battery_sad": "BATTERY_CRITICAL (10 %)", "cloud_farewell": "BATTERY_SHUTDOWN (1 %, then Mimio stops)",
+    "inertia_left": "preview only (no trigger yet)", "inertia_right": "preview only (no trigger yet)",
+    "inertia_forward": "preview only (no trigger yet)", "inertia_back": "preview only (no trigger yet)",
 }
 
 EDGE_ALPHA_MAX = 8       # opacity allowed in the outermost pixel row/column (anti-aliasing only)
@@ -3559,7 +4149,8 @@ def write_gallery(path, names):
         fn, n = EMOTIONS[name]
         f = os.path.join(OUT_DIR, f"fox_{name}.webp")
         kb = os.path.getsize(f) // 1024 if os.path.exists(f) else 0
-        group = "wave4" if name in WAVE4 else ("car" if name in CAR else ("wave3" if name in WAVE3 else ""))
+        group = ("wave5" if name in WAVE5 else "wave4" if name in WAVE4 else "car" if name in CAR
+                 else "wave3" if name in WAVE3 else "")
         cards.append(dict(name=name, src=f"{rel}/fox_{name}.webp", frames=n, ms=n * FRAME_MS, kb=kb,
                           desc=describe(name), use=USAGE.get(name, ""), group=group))
     import json
@@ -3591,7 +4182,7 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 </style></head><body>
 <header><h1>Лисёнок — анимации</h1>
 <div class="meta">Animated WebP прямо из <code>app/src/main/res/raw</code>. Нажмите на карточку, чтобы посмотреть отдельно.</div>
-<div class="bar" id="filters"><button data-f="wave4" aria-pressed="true">Волна 4</button><button data-f="car" aria-pressed="false">Автомобиль</button><button data-f="wave3" aria-pressed="false">Волна 3</button><button data-f="all" aria-pressed="false">Все</button>
+<div class="bar" id="filters"><button data-f="wave5" aria-pressed="true">Волна 5</button><button data-f="wave4" aria-pressed="false">Волна 4</button><button data-f="car" aria-pressed="false">Автомобиль</button><button data-f="wave3" aria-pressed="false">Волна 3</button><button data-f="all" aria-pressed="false">Все</button>
 <span style="flex:1"></span><button data-bg="" aria-pressed="true">Светлый фон</button><button data-bg="dark" aria-pressed="false">Тёмный</button><button data-bg="checker" aria-pressed="false">Прозрачность</button></div>
 </header>
 <main id="grid"></main>
@@ -3600,7 +4191,7 @@ dialog::backdrop{background:#0008}.big{max-width:384px;margin:auto}.row{display:
 <div class="row"><button id="replay">↻ Сначала</button><button id="prev">← Пред.</button><button id="next">След. →</button><span style="flex:1"></span><button id="close">Закрыть</button></div></dialog>
 <script>
 const CARDS = __CARDS__;
-let filter = "wave4", bg = "", shown = [], cur = 0;
+let filter = "wave5", bg = "", shown = [], cur = 0;
 const grid = document.getElementById("grid"), dlg = document.getElementById("dlg");
 function render() {
   shown = CARDS.filter(c => filter === "all" || c.group === filter);
@@ -3608,7 +4199,7 @@ function render() {
   shown.forEach((c, k) => {
     const b = document.createElement("button"); b.className = "card";
     b.innerHTML = `<div class="stage ${bg}"><img loading="lazy" src="${c.src}" alt="${c.name}"></div>
-      <div class="name">${c.name}${c.group === "wave4" ? '<span class="badge">new</span>' : ""}</div>
+      <div class="name">${c.name}${c.group === "wave5" ? '<span class="badge">new</span>' : ""}</div>
       <div class="meta">${c.use || "&nbsp;"}</div><div class="meta">${(c.ms / 1000).toFixed(1)} с · ${c.frames} кадров · ${c.kb} KB</div>`;
     b.onclick = () => open(k); grid.appendChild(b);
   });
@@ -3658,6 +4249,8 @@ def main():
         only += CAR
     if "--wave4" in args:
         only += WAVE4
+    if "--wave5" in args:
+        only += WAVE5
     all_frames = {}
     for name, (fn, n) in EMOTIONS.items():
         if only and name not in only:
@@ -3677,7 +4270,7 @@ def main():
         os.makedirs(preview_dir, exist_ok=True)
         save_preview(all_frames, preview_dir)
     if gallery:
-        names = WAVE4 + CAR + WAVE3 + [k for k in EMOTIONS if k not in WAVE3 and k not in CAR and k not in WAVE4]
+        names = WAVE5 + WAVE4 + CAR + WAVE3 + [k for k in EMOTIONS if k not in WAVE3 + CAR + WAVE4 + WAVE5]
         write_gallery(gallery, names)
         print(f"gallery: {gallery}")
 
