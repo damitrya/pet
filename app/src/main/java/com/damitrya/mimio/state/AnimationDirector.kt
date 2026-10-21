@@ -27,9 +27,15 @@ data class PlayContext(
  * - **car**: [AnimTag.CAR] variants only play in the AUTO profile, [AnimTag.DRIVING] only while the car
  *   moves, [AnimTag.PARKED_ONLY] only at a confirmed standstill (or while getting ready, for
  *   [AnimTag.PREPARING] ones), and [AnimTag.MAINTENANCE] scenes are at least [MAINTENANCE_GAP_MS] apart;
+ * - **time, not count** (CALM, wave 6): [ActivityScheduler] decides by the clock, the user's
+ *   [CompanionActivityMode] and the mood whether the next CALM pick is basic calm, a small movement or a
+ *   mini-scene; the pick is then made inside that category. A scene that cannot play (cooldown, minimum gap,
+ *   context) is replaced by a small movement — its limits are never broken to force it;
  * - **variety**: variants played recently lose weight, [AnimationVariant.minGapMs] spaces rare ones out,
- *   and self-started scenes are at least [SCENE_GAP_MS] apart;
- * - **calm first**: in pools with [AnimTag.BASE] variants those keep at least [MIN_BASE_SHARE] of the chance;
+ *   the same small movement never plays twice in a row, and self-started scenes are at least
+ *   [CompanionActivityMode.sceneGapMs] (CALM) or [MUSIC_SHOW_GAP_MS] (music shows) apart;
+ * - **calm first**: in pools with [AnimTag.BASE] variants those keep at least [MIN_BASE_SHARE] of the chance
+ *   (CALM: after every scene the scheduler plays basic calm first);
  * - **the heart**: every [HEART_EVERY_PETS]th petting finale (HEARTS or SHY) without a heart turns into a heart
  *   for sure ([isHeartDue]; the state machine then plays HEARTS instead of SHY); cooldown and minGap only hold
  *   back the random heart in between. Why it was or was not picked goes to [log];
@@ -49,10 +55,20 @@ class AnimationDirector(
     private val context: () -> PlayContext = { PlayContext() },
     private val random: Random = Random.Default,
     private val clock: () -> Long = System::currentTimeMillis,
-    /** Why the heart was (not) picked, guaranteed or not (logcat in the app). */
+    /** The user's activity mode; read at every CALM pick, so a change in the settings applies at once. */
+    private val activityMode: () -> CompanionActivityMode = { CompanionActivityMode.DEFAULT },
+    /** Self-started behaviour, step by step (debug builds: MimioActivity); null = off. */
+    private val activityLog: ((String) -> Unit)? = null,
+    /** Why the heart was (not) picked, guaranteed or not (logcat in the app). Last: a trailing lambda is this log. */
     private val log: (String) -> Unit = {}
 ) {
     private val pools: Map<CompanionState, AnimationPool> = AnimationPools.create(random)
+
+    /** When CALM shows basic calm, a small movement or a scene. */
+    private val activity = ActivityScheduler(activityMode, random, activityLog)
+
+    /** The last small movement in CALM: never the same one twice in a row. */
+    private var lastMicro: String? = null
 
     /** Last picks (newest last), for the repetition penalty. */
     private val history = ArrayDeque<String>()
@@ -91,6 +107,11 @@ class AnimationDirector(
      */
     fun pick(state: CompanionState, isAvailable: (AnimationVariant) -> Boolean): AnimationVariant? {
         val now = clock()
+        when (state) {
+            CompanionState.CALM -> {}
+            CompanionState.BLINK -> activity.onBlink(now)
+            else -> activity.onOtherState(now)     // a reaction or another ambient state: the CALM plan steps back
+        }
         armedNext = emptyMap()         // something else starts: the previous end pose will not be reached
         if (state !in pendingNext) pendingNext.clear()
         pendingNext.remove(state)?.let { name ->
@@ -112,7 +133,8 @@ class AnimationDirector(
             log("HEARTS: the heart is due, but this character has no ${heart.resName}")
             finalesSinceHeart = 0
         }
-        val weights = weightsFor(pool, isAvailable, now)
+        val weights = weightsFor(pool, isAvailable, now, sceneGapFor(state))
+        if (state == CompanionState.CALM) return pickCalm(pool, weights, isAvailable, now)
         val heartCooldown = if (state == CompanionState.HEARTS) heartCooldown(pool) else 0
         val chosen = pool.pick(isAvailable, { weights[it] ?: 0.0 }, random) ?: return null
         if (state == CompanionState.HEARTS) {
@@ -121,6 +143,85 @@ class AnimationDirector(
         armedNext = chosen.next
         return played(state, chosen, now)
     }
+
+    /**
+     * CALM: [ActivityScheduler] names the category, the weights choose inside it. An unavailable scene becomes a
+     * small movement, an unavailable small movement basic calm; cooldowns and minimum gaps are never broken for it.
+     */
+    private fun pickCalm(
+        pool: AnimationPool,
+        weights: Map<AnimationVariant, Double>,
+        isAvailable: (AnimationVariant) -> Boolean,
+        now: Long
+    ): AnimationVariant? {
+        val ctx = context()
+        val m = mood.snapshot()
+        val decision = activity.decide(now, ctx, m)
+        var chosen: AnimationVariant? = null
+        if (decision.category == ActivityCategory.SCENE) {
+            chosen = pickIn(pool, weights, ActivityCategory.SCENE, decision.initiative)
+            if (chosen == null) activity.onSceneUnavailable(now, m, if (activityLog != null) sceneUnavailable(pool, isAvailable, now) else "")
+        }
+        if (chosen == null && decision.category != ActivityCategory.AMBIENT) {
+            chosen = pickIn(pool, weights, ActivityCategory.MICRO, decision.initiative)
+        }
+        if (chosen == null) chosen = pickIn(pool, weights, ActivityCategory.AMBIENT, false)
+        if (chosen == null) chosen = pool.pick(isAvailable, { weights[it] ?: 0.0 }, random) ?: return null
+        if (chosen.category == ActivityCategory.MICRO) lastMicro = chosen.resName
+        // Only a fitting animation counts as the fox's initiative (its window may have had none free).
+        val fulfilled = decision.copy(initiative = decision.initiative && chosen.resName in AnimationPools.INITIATIVE)
+        activity.onPicked(chosen.resName, chosen.category, fulfilled, now, ctx, m)
+        armedNext = chosen.next
+        return played(CompanionState.CALM, chosen, now)
+    }
+
+    /**
+     * Weighted pick among the variants of [category] that may play now (weight > 0; MICRO and SCENE also off
+     * their cooldown, MICRO not the last one again). An [initiative] prefers [AnimationPools.INITIATIVE].
+     */
+    private fun pickIn(
+        pool: AnimationPool,
+        weights: Map<AnimationVariant, Double>,
+        category: ActivityCategory,
+        initiative: Boolean
+    ): AnimationVariant? {
+        var candidates = weights.filter { (v, w) ->
+            w > 0.0 && v.category == category && (category == ActivityCategory.AMBIENT || pool.cooldownOf(v) == 0)
+        }
+        if (category == ActivityCategory.MICRO) {
+            candidates.filterKeys { it.resName != lastMicro }.let { if (it.isNotEmpty()) candidates = it }
+        }
+        if (initiative) {
+            candidates.filterKeys { it.resName in AnimationPools.INITIATIVE }.let { if (it.isNotEmpty()) candidates = it }
+        }
+        if (candidates.isEmpty()) return null
+        return pool.pick({ it in candidates }, { candidates[it] ?: 0.0 }, random)
+    }
+
+    /** Why no scene could play although its window was open (debug log only). */
+    private fun sceneUnavailable(pool: AnimationPool, isAvailable: (AnimationVariant) -> Boolean, now: Long): String {
+        val scenes = pool.variants.filter { it.category == ActivityCategory.SCENE && isAvailable(it) }
+        if (scenes.isEmpty()) return "this character has no scenes"
+        val ctx = context()
+        return scenes.joinToString(prefix = "every scene rests: ") { v ->
+            val last = lastPlayedAt[v.resName]
+            val why = when {
+                !carAllows(v, ctx) -> "not here"
+                AnimTag.MAINTENANCE in v.tags && now - lastMaintenanceAt < MAINTENANCE_GAP_MS -> "car care gap"
+                last != null && now - last < v.minGapMs -> "min gap ${(v.minGapMs - (now - last)) / 1000} s"
+                pool.cooldownOf(v) > 0 -> "cooldown ${pool.cooldownOf(v)}"
+                else -> "weight 0"
+            }
+            "${v.resName} ($why)"
+        }
+    }
+
+    /** Self-started scenes of [state] are at least this far apart: the user's mode in CALM, the shows' gap elsewhere. */
+    private fun sceneGapFor(state: CompanionState): Long =
+        if (state == CompanionState.CALM) activityMode().sceneGapMs else MUSIC_SHOW_GAP_MS
+
+    /** Self-started behaviour of this session (debug tools → statistics). */
+    fun activityStats(): ActivityStats = activity.stats(clock())
 
     /** The requested preview file, played as it is: no history, no gaps, no mood. */
     private fun pickPreview(isAvailable: (AnimationVariant) -> Boolean): AnimationVariant? {
@@ -211,20 +312,23 @@ class AnimationDirector(
         pendingNext.clear()
         current = null
         currentState = null
+        // Fresh activity windows from now: nothing missed while hidden is played afterwards. Mood and stats stay.
+        activity.reset(clock())
     }
 
     /** Dynamic weight of every available variant of [pool]. Exposed for tests. */
     internal fun weightsFor(
         pool: AnimationPool,
         isAvailable: (AnimationVariant) -> Boolean,
-        now: Long = clock()
+        now: Long = clock(),
+        sceneGapMs: Long = MUSIC_SHOW_GAP_MS
     ): Map<AnimationVariant, Double> {
         val m = mood.snapshot()
         val ctx = context()
         val weights = LinkedHashMap<AnimationVariant, Double>()
         for (v in pool.variants) {
             if (!isAvailable(v)) continue
-            weights[v] = dynamicWeight(v, m, ctx, now)
+            weights[v] = dynamicWeight(v, m, ctx, now, sceneGapMs)
         }
         // Rare extras must not crowd out the basic calm behaviour.
         val base = weights.filterKeys { AnimTag.BASE in it.tags }.values.sum()
@@ -237,7 +341,7 @@ class AnimationDirector(
         return weights
     }
 
-    private fun dynamicWeight(v: AnimationVariant, m: MoodSnapshot, ctx: PlayContext, now: Long): Double {
+    private fun dynamicWeight(v: AnimationVariant, m: MoodSnapshot, ctx: PlayContext, now: Long, sceneGapMs: Long): Double {
         var w = v.weight.toDouble()
         if (AnimTag.BASE in v.tags) return w
         if (!carAllows(v, ctx)) return 0.0
@@ -246,11 +350,12 @@ class AnimationDirector(
         val e = m.energy / 100.0
         val a = m.affection / 100.0
         val c = m.curiosity / 100.0
-        if (AnimTag.SLEEPY in v.tags) w *= lerp(2.6, 0.4, e)
-        if (AnimTag.ACTIVE in v.tags) w *= lerp(0.3, 1.6, e)
-        if (AnimTag.EXPLORE in v.tags) w *= lerp(0.4, 2.2, c)
+        // Wave 6: a stronger pull of the mood (it was 2.6–0.4, 0.3–1.6, 0.4–2.2, 0.5–2.0).
+        if (AnimTag.SLEEPY in v.tags) w *= lerp(3.0, 0.3, e)
+        if (AnimTag.ACTIVE in v.tags) w *= lerp(0.25, 1.9, e)
+        if (AnimTag.EXPLORE in v.tags) w *= lerp(0.3, 2.8, c)
         if (AnimTag.FRIENDLY in v.tags) {
-            w *= lerp(0.5, 2.0, a)
+            w *= lerp(0.35, 2.7, a)
             if (ctx.sinceInteractionMs < RECENT_INTERACTION_MS) w *= 1.5
         }
 
@@ -258,7 +363,7 @@ class AnimationDirector(
             if (AnimTag.SCENE in v.tags || AnimTag.ACTIVE in v.tags) return 0.0
             if (AnimTag.DRIVING !in v.tags) w *= MOVING_EXTRA_FACTOR
         }
-        if (AnimTag.SCENE in v.tags && now - lastSceneAt < SCENE_GAP_MS) return 0.0
+        if (AnimTag.SCENE in v.tags && now - lastSceneAt < sceneGapMs) return 0.0
         if (v.minGapMs > 0) {
             val last = lastPlayedAt[v.resName]
             if (last != null && now - last < v.minGapMs) return 0.0
@@ -291,9 +396,17 @@ class AnimationDirector(
         current = v
         currentState = state
         currentStartedAt = now
-        mood.onPlayed(v.tags)
+        mood.onPlayed(v.tags, moodShare(state, v))
         return v
     }
+
+    /** How much a play changes the mood: self-started CALM movements and scenes less than reactions and shows. */
+    private fun moodShare(state: CompanionState, v: AnimationVariant): Float =
+        if (state != CompanionState.CALM) 1f else when (v.category) {
+            ActivityCategory.AMBIENT -> 1f
+            ActivityCategory.MICRO -> MICRO_MOOD_SHARE
+            ActivityCategory.SCENE -> SCENE_MOOD_SHARE
+        }
 
     private fun lerp(from: Double, to: Double, t: Double) = from + (to - from) * t.coerceIn(0.0, 1.0)
 
@@ -301,15 +414,18 @@ class AnimationDirector(
         /** Minimum share of [AnimTag.BASE] variants in a pool's total weight. */
         const val MIN_BASE_SHARE = 0.55
 
-        /** Self-started scenes are at least this far apart. */
-        const val SCENE_GAP_MS = 45_000L
+        /**
+         * Music shows (and the scenes of the dance breaks) are at least this far apart. Self-started CALM scenes use
+         * the gap of the user's [CompanionActivityMode] instead (the former global SCENE_GAP_MS).
+         */
+        const val MUSIC_SHOW_GAP_MS = 45_000L
 
         /** A scene longer than this is considered finished even without an end callback. */
         const val MAX_SCENE_MS = 8_000L
 
         /** Weight multiplier per recent play of the same variant (last [HISTORY_SIZE] picks). */
         const val REPEAT_FACTOR = 0.35
-        const val HISTORY_SIZE = 8
+        const val HISTORY_SIZE = 10
 
         /** Non-basic extras while driving (scenes and active ones are off entirely). */
         const val MOVING_EXTRA_FACTOR = 0.6
@@ -321,6 +437,10 @@ class AnimationDirector(
 
         /** [AnimTag.PREPARING] variants while getting ready for a trip. */
         const val PREPARING_FACTOR = 3.0
+
+        /** Mood effect of a self-started small movement / scene in CALM (a reaction or a show: 1). */
+        const val MICRO_MOOD_SHARE = 0.04f
+        const val SCENE_MOOD_SHARE = 0.3f
 
         /** Every this many petting finales at least one is the heart (counting from the last heart). */
         const val HEART_EVERY_PETS = 5

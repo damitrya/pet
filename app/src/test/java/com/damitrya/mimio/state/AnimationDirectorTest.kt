@@ -101,7 +101,7 @@ class AnimationDirectorTest {
             if (AnimTag.BASE !in v.tags) assertNotEquals("${v.resName} twice in a row", previous, v.resName)
             previous = v.resName
         }
-        sceneTimes.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.SCENE_GAP_MS) }
+        sceneTimes.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= CompanionActivityMode.DEFAULT.sceneGapMs) }
         val pools = AnimationPools.create().getValue(CompanionState.CALM).variants
         for (v in pools.filter { it.minGapMs > 0 }) {
             byName[v.resName]?.zipWithNext()?.forEach { (a, b) -> assertTrue(v.resName, b - a >= v.minGapMs) }
@@ -220,7 +220,7 @@ class AnimationDirectorTest {
         d.onFinished(CompanionState.CALM, scene)
         assertFalse(d.isSceneRunning())
 
-        clock.advance(AnimationDirector.SCENE_GAP_MS + 1)
+        clock.advance(CompanionActivityMode.DEFAULT.sceneGapMs + 1)
         d.pick(CompanionState.CALM) { it.resName == "yawn" }
         assertTrue(d.isSceneRunning())
         clock.advance(AnimationDirector.MAX_SCENE_MS)

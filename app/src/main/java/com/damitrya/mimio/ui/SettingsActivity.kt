@@ -29,7 +29,9 @@ import com.damitrya.mimio.databinding.ActivitySettingsBinding
 import com.damitrya.mimio.overlay.HapticPlayer
 import com.damitrya.mimio.overlay.TouchHaptics
 import com.damitrya.mimio.service.CompanionService
+import com.damitrya.mimio.state.ActivityDiagnostics
 import com.damitrya.mimio.state.AnimationPools
+import com.damitrya.mimio.state.CompanionActivityMode
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -70,6 +72,7 @@ class SettingsActivity : AppCompatActivity() {
 
         setupUI()
         setupHapticsUI()
+        setupActivityUI()
         setupDebugTools()
         setupProfileUI()
         setupDailySettingsUI()
@@ -200,6 +203,50 @@ class SettingsActivity : AppCompatActivity() {
         binding.btnTestHaptics.setOnClickListener { runHapticsTest() }
     }
 
+    /** Character activity: the running service reads the mode at its next decision, no restart needed. */
+    private fun setupActivityUI() {
+        binding.radioActivity.check(
+            when (settings.activityMode) {
+                CompanionActivityMode.CALM -> R.id.radio_activity_calm
+                CompanionActivityMode.LIVELY -> R.id.radio_activity_lively
+                CompanionActivityMode.PLAYFUL -> R.id.radio_activity_playful
+            }
+        )
+        binding.radioActivity.setOnCheckedChangeListener { _, checkedId ->
+            settings.activityMode = when (checkedId) {
+                R.id.radio_activity_calm -> CompanionActivityMode.CALM
+                R.id.radio_activity_playful -> CompanionActivityMode.PLAYFUL
+                else -> CompanionActivityMode.LIVELY
+            }
+        }
+    }
+
+    /** Debug tools: what the fox did on its own in this session (counters and times only). */
+    private fun showActivityStats() {
+        val stats = ActivityDiagnostics.current()
+        val view = binding.tvActivityStats
+        view.visibility = View.VISIBLE
+        if (stats == null) {
+            view.setText(R.string.preview_not_running)
+            return
+        }
+        val active = (stats.activeShare * 100).toInt()
+        val modeName = getString(
+            when (stats.mode) {
+                CompanionActivityMode.CALM -> R.string.activity_calm
+                CompanionActivityMode.LIVELY -> R.string.activity_lively
+                CompanionActivityMode.PLAYFUL -> R.string.activity_playful
+            }
+        )
+        view.text = getString(
+            R.string.activity_stats_format,
+            modeName, (stats.sessionMs / 60_000).toInt(),
+            stats.ambient, stats.micro, stats.scenes, stats.skippedScenes, stats.initiatives,
+            active, 100 - active,
+            (stats.nextMicroInMs.coerceAtLeast(0L) / 1000).toInt(), (stats.nextSceneInMs.coerceAtLeast(0L) / 1000).toInt()
+        )
+    }
+
     private fun runHapticsTest() {
         hapticDemo.removeCallbacksAndMessages(null)
         val player = HapticPlayer(this)
@@ -246,6 +293,7 @@ class SettingsActivity : AppCompatActivity() {
                     (it as? TextView)?.setTextColor(ContextCompat.getColor(context, R.color.text_primary))
                 }
         }.apply { setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+        binding.btnActivityStats.setOnClickListener { showActivityStats() }
         binding.btnPreviewPlay.setOnClickListener {
             (binding.spinnerPreview.selectedItem as? String)?.let { preview(it) }
         }

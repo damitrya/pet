@@ -20,7 +20,8 @@ import kotlin.random.Random
 /**
  * Finite state machine that determines the companion's current state.
  * Manages automatic BLINK transitions while in CALM state, short FIDGET breaks while dancing
- * to MUSIC, and falls asleep after a long period without interaction.
+ * to MUSIC, and falls asleep after a long period without interaction (how long depends on the user's
+ * [CompanionActivityMode]: [CompanionActivityMode.drowsyAfterMs], [CompanionActivityMode.sleepAfterMs]).
  *
  * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
  * RELIEF / TRIP_START / ARRIVAL > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) >
@@ -925,9 +926,11 @@ class StateMachine(
         val now = clock()
         val idleFor = now - lastActivityAt
         val moving = isConfirmedMoving() || isShortStop()     // not at a traffic light either
-        if (idleFor >= SLEEP_AFTER_MS && !moving) {
+        // A livelier activity mode stays awake longer (calm: 2 / 3 min, as before).
+        val mode = settings.activityMode
+        if (idleFor >= mode.sleepAfterMs && !moving) {
             transitionTo(CompanionState.FALL_ASLEEP)
-        } else if (idleFor >= DROWSY_AFTER_MS && drowsyAt < lastActivityAt && !moving) {
+        } else if (idleFor >= mode.drowsyAfterMs && drowsyAt < lastActivityAt && !moving) {
             drowsyAt = now
             transitionTo(CompanionState.DROWSY)
         } else {
@@ -995,12 +998,6 @@ class StateMachine(
         /** Pettings within [SHY_WINDOW_MS] that make the companion SHY instead of HEARTS. */
         private const val SHY_PET_COUNT = 3
         private const val SHY_WINDOW_MS = 20_000L
-
-        /** Time without any activity in CALM before falling asleep. */
-        private const val SLEEP_AFTER_MS = 3 * 60_000L
-
-        /** Time without any activity in CALM before DROWSY (once, ahead of falling asleep). */
-        private const val DROWSY_AFTER_MS = 2 * 60_000L
 
         /**
          * States a sharp turn may interrupt: ambient states and one-shots nobody asked for.

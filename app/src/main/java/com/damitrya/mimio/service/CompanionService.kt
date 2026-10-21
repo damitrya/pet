@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.IntentFilter
+import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.os.BatteryManager
 import android.os.Build
@@ -45,6 +46,7 @@ import com.damitrya.mimio.data.TimeDataProvider
 import com.damitrya.mimio.data.WeatherData
 import com.damitrya.mimio.data.WeatherDataProvider
 import com.damitrya.mimio.overlay.OverlayManager
+import com.damitrya.mimio.state.ActivityDiagnostics
 import com.damitrya.mimio.state.AnimationDirector
 import com.damitrya.mimio.state.BatteryWatcher
 import com.damitrya.mimio.state.CharacterMood
@@ -88,6 +90,9 @@ class CompanionService : Service(),
         /** Logcat tags: why the heart was (not) chosen, and the state machine's battery / petting decisions. */
         private const val HEART_TAG = "MimioHeart"
         private const val STATE_TAG = "MimioState"
+
+        /** Self-started behaviour, debug builds only: `adb logcat -s MimioActivity`. */
+        private const val ACTIVITY_TAG = "MimioActivity"
 
         /** Retry interval while ALERT/PET postpones a profile switch. */
         private const val BUSY_RETRY_MS = 2000L
@@ -178,7 +183,14 @@ class CompanionService : Service(),
         mediaProvider = MediaStateProvider(this)
         mood = CharacterMood(PrefsMoodStore(this))
         stateMachine = StateMachine(settings, mood = mood)
-        director = AnimationDirector(mood, context = { stateMachine.playContext() }, log = { Log.i(HEART_TAG, it) })
+        val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        director = AnimationDirector(
+            mood, context = { stateMachine.playContext() }, log = { Log.i(HEART_TAG, it) },
+            // Read at every decision: a new choice in the settings applies without a restart.
+            activityMode = { settings.activityMode },
+            activityLog = if (debuggable) { msg -> Log.d(ACTIVITY_TAG, msg) } else null
+        )
+        ActivityDiagnostics.source = { director.activityStats() }
         stateMachine.heartDue = { director.isHeartDue() }
         stateMachine.log = { Log.i(STATE_TAG, it) }
         stateMachine.idleBusy = { director.isSceneRunning() }
@@ -284,6 +296,7 @@ class CompanionService : Service(),
         settings.unregisterChangeListener(settingsListener)
         handler.removeCallbacks(profileRecheck)
         farewell.release()                 // no hide / notification after the service is gone
+        ActivityDiagnostics.source = null
         stateMachine.destroy()
         mood.flush()
         stopProviders()

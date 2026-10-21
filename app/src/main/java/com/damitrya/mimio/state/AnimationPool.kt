@@ -143,6 +143,14 @@ object AnimationPools {
     /** Music shows of wave 5: an accordion (bayan), a balalaika and a punk dance with a mohawk. */
     val MUSIC_SHOWS_WAVE5 = listOf("bayan", "balalaika", "punk")
 
+    /**
+     * What the fox may do on its own after a long time without the user (wave 6, [ActivityDecision.initiative]):
+     * look around, tilt its head, wag, scratch an ear, wave, start a little game or a friendly scene.
+     */
+    val INITIATIVE = setOf(
+        "head_tilt", "tail_wag", "ear_scratch", "paw_wave", "listen", "tail_play", "tail_hide", "tail_back"
+    )
+
     /** The fox turns into a heart: a petting finale and the farewell when the user hides it. */
     const val HEART_TRANSFORM = "heart_transform"
 
@@ -165,13 +173,19 @@ object AnimationPools {
         fun pool(vararg variants: AnimationVariant) = AnimationPool(variants.toList(), random)
         fun single(resName: String, fallback: String? = null) = pool(AnimationVariant(resName, fallback = fallback))
         return mapOf(
+            // Wave 6: ActivityScheduler decides by time whether CALM plays basic calm (BASE), a small movement
+            // (no BASE / SCENE tag) or a scene (SCENE); the weights below only choose inside that category.
+            // Cooldowns count every CALM pick, basic calm included.
             CompanionState.CALM to pool(
-                AnimationVariant("idle_small", weight = 50, tags = setOf(AnimTag.BASE)),
-                AnimationVariant("idle2", weight = 18, cooldown = 1, tags = setOf(AnimTag.BASE)),   // looks around
-                AnimationVariant("yawn", weight = 5, cooldown = 6, tags = setOf(AnimTag.SLEEPY)),
-                AnimationVariant("ear_scratch", weight = 5, cooldown = 6),
-                AnimationVariant("tail_wag", weight = 7, cooldown = 2, tags = setOf(AnimTag.FRIENDLY)),
-                AnimationVariant("stretch", weight = 4, cooldown = 8, tags = setOf(AnimTag.SLEEPY)),
+                AnimationVariant("idle_small", weight = 45, tags = setOf(AnimTag.BASE)),
+                AnimationVariant("idle2", weight = 30, cooldown = 1, tags = setOf(AnimTag.BASE)),   // looks around
+                // Small movements: head, ears, tail first; yawning and stretching mostly when tired.
+                AnimationVariant("yawn", weight = 4, cooldown = 8, tags = setOf(AnimTag.SLEEPY)),
+                AnimationVariant("ear_scratch", weight = 6, cooldown = 6),
+                AnimationVariant("tail_wag", weight = 8, cooldown = 3, tags = setOf(AnimTag.FRIENDLY)),
+                AnimationVariant("head_tilt", weight = 7, cooldown = 4, tags = setOf(AnimTag.EXPLORE)),
+                AnimationVariant("paw_wave", weight = 3, cooldown = 8, minGapMs = MINUTE, tags = setOf(AnimTag.FRIENDLY)),
+                AnimationVariant("stretch", weight = 3, cooldown = 10, tags = setOf(AnimTag.SLEEPY)),
                 AnimationVariant("shake", weight = 4, cooldown = 6, tags = setOf(AnimTag.ACTIVE)),
                 AnimationVariant("tail_play", weight = 4, cooldown = 10, minGapMs = 3 * MINUTE,
                     tags = setOf(AnimTag.SCENE, AnimTag.ACTIVE)),

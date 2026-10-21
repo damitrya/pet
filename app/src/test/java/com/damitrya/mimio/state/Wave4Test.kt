@@ -248,7 +248,7 @@ class Wave4Test {
             times.getValue(name).zipWithNext().forEach { (a, b) -> assertTrue(name, b - a >= 4 * 60_000L) }
         }
         val shows = (times["guitar"].orEmpty() + times["microphone"].orEmpty()).sorted()
-        shows.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.SCENE_GAP_MS) }
+        shows.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.MUSIC_SHOW_GAP_MS) }
     }
 
     @Test

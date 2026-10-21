@@ -123,4 +123,14 @@
     <string name="label_preview_any">Любая анимация</string>
     <string name="btn_preview_play">Играть</string>
     <string name="preview_not_running">Сначала запустите компаньона и покажите лисёнка</string>
+    <!-- Character activity (wave 6) -->
+    <string name="section_activity">Активность персонажа</string>
+    <string name="activity_calm">Спокойный</string>
+    <string name="activity_calm_desc">Лисёнок преимущественно отдыхает и редко играет самостоятельно.</string>
+    <string name="activity_lively">Живой — по умолчанию</string>
+    <string name="activity_lively_desc">Регулярно двигается, выражает эмоции и иногда устраивает небольшие сценки.</string>
+    <string name="activity_playful">Игривый</string>
+    <string name="activity_playful_desc">Чаще играет, двигается и проявляет инициативу.</string>
+    <string name="btn_activity_stats">Статистика поведения за сеанс</string>
+    <string name="activity_stats_format">Режим: %1$s, сеанс %2$d мин\nБазовые анимации: %3$d\nНебольшие движения: %4$d\nСамостоятельные сценки: %5$d\nПропущенные сценки: %6$d\nИнициатива: %7$d\nАктивные / спокойные: %8$d%% / %9$d%%\nСледующее движение через %10$d с, сценка через %11$d с</string>
 </resources>

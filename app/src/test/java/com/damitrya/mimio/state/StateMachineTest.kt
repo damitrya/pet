@@ -150,7 +150,8 @@ class StateMachineTest {
 
     @Test
     fun fallsAsleepAndWakesUpThroughTheWholeSequence() {
-        scheduler.advance(4 * 60_000L)
+        // Default mode "lively": drowsy after 4 minutes, asleep after 5 (calm: 2 / 3, see Wave6Test).
+        scheduler.advance(CompanionActivityMode.DEFAULT.sleepAfterMs + 60_000L)
         assertTrue(states.contains(CompanionState.DROWSY))
         assertTrue(states.contains(CompanionState.FALL_ASLEEP))
         assertEquals(CompanionState.SLEEP, state)
