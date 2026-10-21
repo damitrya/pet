@@ -62,6 +62,31 @@ class CharacterView @JvmOverloads constructor(
     /** Haptic ticks; the view gives one when the fox has become a heart. */
     var haptics: TouchHaptics? = null
 
+    /**
+     * What to do when the drawable on screen genuinely ends (next variant, or the one-shot's end);
+     * null for a single-variant loop. Replaced on every play instead of re-registering callbacks.
+     */
+    private var endAction: (() -> Unit)? = null
+
+    /**
+     * The one callback every decoded drawable carries for its whole life — it is never removed.
+     * AnimatedImageDrawable posts onAnimationStart/onAnimationEnd as lambdas that iterate its callback
+     * list; clearAnimationCallbacks() (also called by unregisterAnimationCallback() for the last one)
+     * nulls that list, and a lambda already posted then crashes with an NPE inside the framework
+     * (postOnAnimationStart, seen on Motorola when switching to the car profile).
+     */
+    private val animationCallback = object : Animatable2.AnimationCallback() {
+        override fun onAnimationStart(d: Drawable?) {
+            logAnim("start", d)
+        }
+
+        override fun onAnimationEnd(d: Drawable?) {
+            logAnim("end", d)
+            val action = endAction ?: return
+            post { if (endAction === action && isRealEnd(d)) action() }
+        }
+    }
+
     /** Tick at [AnimationPools.HEART_MOMENT_MS] of heart_transform; dropped if anything else starts. */
     private val heartTick = Runnable { haptics?.play(TouchHaptics.Effect.HEART) }
 
@@ -133,47 +158,40 @@ class CharacterView @JvmOverloads constructor(
 
         val drawable = obtainDrawable(resId)
         val previous = imageView.drawable as? AnimatedImageDrawable
+        // The previous drawable keeps its callback: its end is ignored by isRealEnd (no longer on screen).
+        endAction = null
         if (previous != null && previous !== drawable) {
-            previous.clearAnimationCallbacks()
             previous.stop()
+            logAnim("stop", previous)
         }
 
         imageView.visibility = View.VISIBLE
         imageView.setImageDrawable(drawable)
         (drawable as? AnimatedImageDrawable)?.apply {
             // A cached drawable may still be running (e.g. PET → HEARTS share pet.webp for the slime):
-            // stop() makes the next start() replay from the first frame.
-            clearAnimationCallbacks()
+            // stop() makes the next start() replay from the first frame. The end it posts is not a real
+            // one: by the time it is delivered start() has run and isRealEnd sees the drawable running.
             stop()
             if (state.isLooping && pool.variants.size > 1) {
                 // Play once, then pick the next variant
                 repeatCount = 0
-                registerAnimationCallback(object : Animatable2.AnimationCallback() {
-                    override fun onAnimationEnd(d: Drawable?) {
-                        post {
-                            if (isRealEnd(d) && currentState == state) {
-                                if (variant != null) director?.onFinished(state, variant)
-                                playVideo(state)
-                            }
-                        }
+                endAction = {
+                    if (currentState == state) {
+                        if (variant != null) director?.onFinished(state, variant)
+                        playVideo(state)
                     }
-                })
+                }
             } else {
                 repeatCount = if (state.isLooping) AnimatedImageDrawable.REPEAT_INFINITE else 0
                 if (!state.isLooping) {
-                    registerAnimationCallback(object : Animatable2.AnimationCallback() {
-                        override fun onAnimationEnd(d: Drawable?) {
-                            post {
-                                if (isRealEnd(d)) {
-                                    // The director continues a sequence (curl_up → sleep_curled) only from here.
-                                    if (variant != null) director?.onFinished(state, variant)
-                                    oneShotAnimationEndListener?.invoke(state)
-                                }
-                            }
-                        }
-                    })
+                    endAction = {
+                        // The director continues a sequence (curl_up → sleep_curled) only from here.
+                        if (variant != null) director?.onFinished(state, variant)
+                        oneShotAnimationEndListener?.invoke(state)
+                    }
                 }
             }
+            logAnim("play ${variant?.resName} state=$state", this)
             start()
         }
     }
@@ -206,7 +224,10 @@ class CharacterView @JvmOverloads constructor(
     private fun obtainDrawable(resId: Int): Drawable =
         drawableCache.getOrPut(resId) {
             decodes++
-            ImageDecoder.decodeDrawable(ImageDecoder.createSource(context.resources, resId))
+            ImageDecoder.decodeDrawable(ImageDecoder.createSource(context.resources, resId)).also {
+                // Registered once, never removed: see animationCallback.
+                (it as? AnimatedImageDrawable)?.registerAnimationCallback(animationCallback)
+            }
         }
 
     /** Cache misses since the view was created (memory log in debug builds). */
@@ -234,6 +255,11 @@ class CharacterView @JvmOverloads constructor(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         if (debuggable) postDelayed(memoryLog, MEMORY_LOG_MS)
+    }
+
+    /** Debug builds only: WebP start/stop/end (`adb logcat -s MimioAnim`). */
+    private fun logAnim(event: String, d: Drawable?) {
+        if (debuggable) Log.d(ANIM_TAG, "$event drawable=${System.identityHashCode(d).toString(16)}")
     }
 
     override fun onDetachedFromWindow() {
@@ -266,7 +292,11 @@ class CharacterView @JvmOverloads constructor(
     }
 
     private fun stopAnimatedDrawable() {
-        (imageView.drawable as? AnimatedImageDrawable)?.stop()
+        endAction = null
+        (imageView.drawable as? AnimatedImageDrawable)?.let {
+            it.stop()
+            logAnim("stop", it)
+        }
         imageView.setImageDrawable(null)
     }
 
@@ -296,5 +326,6 @@ class CharacterView @JvmOverloads constructor(
         private const val CUT_FADE_MS = 120L
         private const val MEMORY_LOG_MS = 60_000L
         private const val MEMORY_TAG = "MimioMem"
+        private const val ANIM_TAG = "MimioAnim"
     }
 }
