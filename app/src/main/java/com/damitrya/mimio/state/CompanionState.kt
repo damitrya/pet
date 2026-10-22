@@ -61,7 +61,7 @@ enum class CompanionState(
     /** One-shot transition into SLEEP after a long period without interaction. */
     FALL_ASLEEP("", false, "fall_asleep"),
 
-    /** Looping sleep. Left via WAKE on tap / long press / music, or directly by ALERT and TRIP_START. */
+    /** Looping sleep. Left via WAKE on tap / long press / music / the car driving off (AUTO), or directly by ALERT and TRIP_START. */
     SLEEP("", true, "sleep"),
 
     /** One-shot waking up, then returns to the looping state (CALM or MUSIC). */

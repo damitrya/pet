@@ -27,7 +27,7 @@ enum class CompanionActivityMode(
     val initiativeGapMs: Long,
     /** Chance that a due window becomes an initiative (before the mood factor). */
     val initiativeChance: Double,
-    /** Without any activity: drowsy once, then dozing off ([StateMachine]). */
+    /** DAILY profile without any activity: drowsy once, then dozing off ([StateMachine]; AUTO has its own limits). */
     val drowsyAfterMs: Long,
     val sleepAfterMs: Long
 ) {
