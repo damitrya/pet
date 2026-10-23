@@ -150,7 +150,8 @@ class StateMachineTest {
 
     @Test
     fun fallsAsleepAndWakesUpThroughTheWholeSequence() {
-        scheduler.advance(4 * 60_000L)
+        // This test runs in AUTO: drowsy after 15 minutes, asleep after 30 (DAILY: see SleepByProfileTest).
+        scheduler.advance(StateMachine.CAR_SLEEP_AFTER_MS + 60_000L)
         assertTrue(states.contains(CompanionState.DROWSY))
         assertTrue(states.contains(CompanionState.FALL_ASLEEP))
         assertEquals(CompanionState.SLEEP, state)
@@ -242,7 +243,7 @@ class StateMachineTest {
     @Test
     fun musicWhileDozingOffWakesUpFirst() {
         var steps = 0
-        while (state != CompanionState.FALL_ASLEEP) { scheduler.advance(250); check(++steps < 4000) }
+        while (state != CompanionState.FALL_ASLEEP) { scheduler.advance(250); check(++steps < 10_000) }   // AUTO: 30 min
         sm.updateMediaData(MediaData(isPlaying = true))
         assertEquals("dozing off is not cut short", CompanionState.FALL_ASLEEP, state)
         scheduler.advance(2_100)

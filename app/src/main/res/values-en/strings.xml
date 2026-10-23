@@ -123,4 +123,14 @@
     <string name="label_preview_any">Any animation</string>
     <string name="btn_preview_play">Play</string>
     <string name="preview_not_running">Start the companion and show the fox first</string>
+    <!-- Character activity (wave 6) -->
+    <string name="section_activity">Character activity</string>
+    <string name="activity_calm">Calm</string>
+    <string name="activity_calm_desc">The fox mostly rests and rarely plays on its own.</string>
+    <string name="activity_lively">Lively — default</string>
+    <string name="activity_lively_desc">Moves regularly, shows emotions and now and then plays a little scene.</string>
+    <string name="activity_playful">Playful</string>
+    <string name="activity_playful_desc">Plays and moves more often and takes the initiative.</string>
+    <string name="btn_activity_stats">Behaviour statistics for this session</string>
+    <string name="activity_stats_format">Mode: %1$s, session %2$d min\nBasic animations: %3$d\nSmall movements: %4$d\nSelf-started scenes: %5$d\nSkipped scenes: %6$d\nInitiative: %7$d\nActive / calm: %8$d%% / %9$d%%\nNext movement in %10$d s, scene in %11$d s</string>
 </resources>

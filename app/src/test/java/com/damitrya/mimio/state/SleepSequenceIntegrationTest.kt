@@ -40,7 +40,9 @@ class SleepSequenceIntegrationTest {
 
     @Before
     fun setUp() {
-        sm = StateMachine(SettingsRepository(InMemoryPrefs()), clock, scheduler, Random(9), mood)
+        // The calm activity mode: dozing off after 3 minutes, as before wave 6 (this test is about the sequence).
+        val settings = SettingsRepository(InMemoryPrefs()).apply { activityMode = CompanionActivityMode.CALM }
+        sm = StateMachine(settings, clock, scheduler, Random(9), mood)
         sm.idleBusy = { director.isSceneRunning() }
         sm.setListener(object : StateMachine.Listener {
             override fun onStateChanged(newState: CompanionState, previousState: CompanionState) = show(newState)

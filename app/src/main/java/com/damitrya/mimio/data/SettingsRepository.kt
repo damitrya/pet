@@ -2,6 +2,7 @@ package com.damitrya.mimio.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.damitrya.mimio.state.CompanionActivityMode
 
 class SettingsRepository(private val prefs: SharedPreferences) {
 
@@ -31,6 +32,7 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         const val KEY_HAPTICS_MODE = "haptics_mode"
         const val KEY_AUTO_HIDE_EMPTY_BATTERY = "auto_hide_empty_battery"
         const val KEY_STOPPED_LOW_BATTERY = "stopped_for_low_battery"
+        const val KEY_ACTIVITY_MODE = "activity_mode"
 
         // Profile
         const val KEY_ACTIVE_PROFILE = "active_profile"
@@ -144,6 +146,15 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         get() = HapticMode.parse(prefs.getString(KEY_HAPTICS_MODE, null))
             ?: if (prefs.getBoolean(KEY_HAPTICS, true)) HapticMode.SOFT else HapticMode.OFF
         set(value) = prefs.edit().putString(KEY_HAPTICS_MODE, value.name).apply()
+
+    /**
+     * How lively the character is on its own: [CompanionActivityMode.CALM], [CompanionActivityMode.LIVELY]
+     * (default, also when the setting is missing after an update) or [CompanionActivityMode.PLAYFUL]. Read at every
+     * decision, so a change applies to the running service at once.
+     */
+    var activityMode: CompanionActivityMode
+        get() = CompanionActivityMode.parse(prefs.getString(KEY_ACTIVITY_MODE, null)) ?: CompanionActivityMode.DEFAULT
+        set(value) = prefs.edit().putString(KEY_ACTIVITY_MODE, value.name).apply()
 
     /** At 1 % (not charging) the fox turns into a cloud and Mimio stops. Off by default. */
     var autoHideOnEmptyBattery: Boolean

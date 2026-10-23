@@ -98,10 +98,10 @@ class Wave5Test {
     @Test
     fun theGuaranteeIgnoresTheCooldownAndTheMinimumGap() {
         // Petting every 15 s: after a heart the random one is blocked for 2 minutes, yet the 5th is a heart.
-        repeat(60) {
+        for (i in 1..60) {
             val f = pet()
             scheduler.advance(15_000L)
-            if (isHeart(f)) return@repeat
+            if (isHeart(f)) break                // the first heart (return@repeat would only skip to the next one)
         }
         val start = played.indexOfLast(::isHeart)
         assertTrue("a first heart within 5 pettings: $played", start >= 0)
@@ -227,6 +227,7 @@ class Wave5Test {
         assertEquals("no extra threshold warning at 8 %", 0, count(CompanionState.LOW_BATTERY))
         awake(BatteryWatcher.REPEAT_MS)
         battery(7)
+        scheduler.advance(6_000L)                 // a blink may be on at this moment: the warning then waits for it
         assertEquals("again after the long pause", 2, count(CompanionState.BATTERY_CRITICAL))
     }
 
@@ -268,8 +269,9 @@ class Wave5Test {
         sm.onOneShotCompleted(CompanionState.ALERT)
         sm.onOneShotCompleted(CompanionState.RELIEF)
         assertEquals(CompanionState.CALM, state)
-        scheduler.advance(6_000L)
-        assertEquals(CompanionState.BATTERY_CRITICAL, state)
+        oneShotMs = 2_000L                       // idle blinks meanwhile end as usual
+        scheduler.advance(12_000L)
+        assertTrue(played.toString(), played.any { it.first == CompanionState.BATTERY_CRITICAL })
     }
 
     @Test
@@ -430,7 +432,7 @@ class Wave5Test {
             t.zipWithNext().forEach { (a, b) -> assertTrue(name, b - a >= minutes * 60_000L) }
         }
         val shows = times.filterKeys { it in setOf("guitar", "microphone") + gaps.keys }.values.flatten().sorted()
-        shows.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.SCENE_GAP_MS) }
+        shows.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= AnimationDirector.MUSIC_SHOW_GAP_MS) }
     }
 
     @Test

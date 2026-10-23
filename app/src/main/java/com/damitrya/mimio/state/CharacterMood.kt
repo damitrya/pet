@@ -101,12 +101,16 @@ class CharacterMood(
         saveIfDue(updatedAt)
     }
 
-    /** An animation just played: exploring satisfies curiosity, active play costs some energy. */
-    fun onPlayed(tags: Set<AnimTag>) {
-        if (tags.isEmpty()) return
+    /**
+     * An animation just played: exploring satisfies curiosity, active play costs some energy. [share] scales the
+     * effect: the many small self-started movements of wave 6 count only a little, so that a lively character
+     * does not use up its mood within minutes.
+     */
+    fun onPlayed(tags: Set<AnimTag>, share: Float = 1f) {
+        if (tags.isEmpty() || share <= 0f) return
         advance()
-        if (AnimTag.EXPLORE in tags) curiosity = (curiosity - EXPLORE_SATISFIES).coerceAtLeast(0f)
-        if (AnimTag.ACTIVE in tags) energy = (energy - ACTIVE_COST).coerceAtLeast(0f)
+        if (AnimTag.EXPLORE in tags) curiosity = (curiosity - EXPLORE_SATISFIES * share).coerceAtLeast(0f)
+        if (AnimTag.ACTIVE in tags) energy = (energy - ACTIVE_COST * share).coerceAtLeast(0f)
     }
 
     fun setAsleep(value: Boolean) {

@@ -20,7 +20,9 @@ import kotlin.random.Random
 /**
  * Finite state machine that determines the companion's current state.
  * Manages automatic BLINK transitions while in CALM state, short FIDGET breaks while dancing
- * to MUSIC, and falls asleep after a long period without interaction.
+ * to MUSIC, and falls asleep after a long period without interaction: in DAILY after the user's
+ * [CompanionActivityMode.drowsyAfterMs] / [CompanionActivityMode.sleepAfterMs], in AUTO after
+ * [CAR_DROWSY_AFTER_MS] / [CAR_SLEEP_AFTER_MS] (never while the car is confirmed moving).
  *
  * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
  * RELIEF / TRIP_START / ARRIVAL > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) >
@@ -134,6 +136,13 @@ class StateMachine(
     /** Last tap, long press, alert, music change or trip start. Drives falling asleep. */
     private var lastActivityAt: Long = clock()
 
+    /**
+     * A profile switch that found the new profile's drowsiness limit already passed (back from a long, quiet
+     * trip): the wake period counts from the switch instead, so the fox does not doze off the moment it is
+     * back. Never moves [lastActivityAt] itself (0 = none).
+     */
+    private var sleepRebasedAt: Long = 0L
+
     /** Latest GPS speed and when it arrived; the companion does not fall asleep while the car is moving. */
     private var lastSpeedKmh: Float = 0f
     private var lastSpeedAt: Long = 0L
@@ -237,6 +246,10 @@ class StateMachine(
      */
     fun setProfile(profile: AppProfile) {
         this.profile = profile
+        // The sleep limits of the new profile apply from the last real activity. Only if the new profile's
+        // drowsiness limit has already passed does a fresh wake period start now (no instant dozing off).
+        val now = clock()
+        if (now - idleSince() >= drowsyAfterMs()) sleepRebasedAt = now
         // Bluetooth / a manual switch is not movement: the trip is only getting ready.
         if (profile == AppProfile.AUTO) trip.onEnteredCar() else trip.onLeftCar()
         arrivalDueAt = 0L
@@ -248,14 +261,19 @@ class StateMachine(
         departedAt = 0L
         wasTurning = false
         wasMoving = false
-        resetInteraction()
+        restartReactions()
     }
 
     /**
-     * Starts the character over (profile switch, overlay shown again) without touching the car:
-     * the trip, its driving time and the GPS state are kept.
+     * Starts the character over (overlay shown again) without touching the car: the trip, its driving time
+     * and the GPS state are kept. Showing the overlay counts as activity.
      */
     fun resetInteraction() {
+        lastActivityAt = clock()
+        restartReactions()
+    }
+
+    private fun restartReactions() {
         // Forced reset: ALERT/PET may be cut short here, and their completion callbacks
         // will no longer match the current state, so clear their guards explicitly.
         alertActive = false
@@ -263,10 +281,22 @@ class StateMachine(
         tapQueued = false
         recentTaps.clear()
         recentPets.clear()
-        lastActivityAt = clock()
         // A call or music outlives a profile switch: go straight back to it.
         transitionTo(ambientState())
     }
+
+    /** Idle time counts from here: the last activity, or a profile switch that restarted the wake period. */
+    private fun idleSince(): Long = maxOf(lastActivityAt, sleepRebasedAt)
+
+    /**
+     * Without activity: drowsy once, then dozing off. DAILY follows the user's [CompanionActivityMode]; in the
+     * car (AUTO, manual or by Bluetooth) the fox keeps the driver company for much longer, whatever the mode.
+     */
+    private fun drowsyAfterMs(): Long =
+        if (profile == AppProfile.AUTO) CAR_DROWSY_AFTER_MS else settings.activityMode.drowsyAfterMs
+
+    private fun sleepAfterMs(): Long =
+        if (profile == AppProfile.AUTO) CAR_SLEEP_AFTER_MS else settings.activityMode.sleepAfterMs
 
     /** Called when the overlay appears: plays GREETING, then returns to CALM. */
     fun onOverlayShown() {
@@ -600,12 +630,19 @@ class StateMachine(
     }
 
     /**
-     * The car started moving: a scene or active animation that began while standing (butterfly, tail
-     * chasing…) stops at once. A FIDGET break ends (back to MUSIC); in CALM the view swaps the variant
+     * The car started moving: a sleeping fox wakes up (AUTO); a scene or active animation that began while
+     * standing (butterfly, tail chasing…) stops at once. A FIDGET break ends (back to MUSIC); in CALM the view swaps the variant
      * for a calm one. Reactions and other states are left alone.
      */
     private fun onStartedMoving() {
         when (currentState) {
+            // Asleep (or dozing off) in the car and it drives off: wake up (WAKE returns to the ambient state). Not
+            // only after parking — a stop of a minute or two is too short for TRIP_START, yet long enough to doze.
+            // Leaving a parking spot at trip speed plays TRIP_START in this same update instead (straight out of sleep).
+            CompanionState.SLEEP, CompanionState.FALL_ASLEEP -> if (profile == AppProfile.AUTO && !(parked && lastSpeedKmh >= MOVING_KMH)) {
+                lastActivityAt = clock()
+                transitionTo(CompanionState.WAKE)
+            }
             // Car scenes for a standing car: buckling up, the flag, parking are over once it moves.
             CompanionState.TRIP_PREPARE, CompanionState.ARRIVAL -> returnToBaseState()
             CompanionState.FIDGET -> if (distractingScene()) returnToBaseState()
@@ -923,11 +960,12 @@ class StateMachine(
             return
         }
         val now = clock()
-        val idleFor = now - lastActivityAt
+        val idleFrom = idleSince()
+        val idleFor = now - idleFrom
         val moving = isConfirmedMoving() || isShortStop()     // not at a traffic light either
-        if (idleFor >= SLEEP_AFTER_MS && !moving) {
+        if (idleFor >= sleepAfterMs() && !moving) {
             transitionTo(CompanionState.FALL_ASLEEP)
-        } else if (idleFor >= DROWSY_AFTER_MS && drowsyAt < lastActivityAt && !moving) {
+        } else if (idleFor >= drowsyAfterMs() && drowsyAt < idleFrom && !moving) {
             drowsyAt = now
             transitionTo(CompanionState.DROWSY)
         } else {
@@ -996,11 +1034,9 @@ class StateMachine(
         private const val SHY_PET_COUNT = 3
         private const val SHY_WINDOW_MS = 20_000L
 
-        /** Time without any activity in CALM before falling asleep. */
-        private const val SLEEP_AFTER_MS = 3 * 60_000L
-
-        /** Time without any activity in CALM before DROWSY (once, ahead of falling asleep). */
-        private const val DROWSY_AFTER_MS = 2 * 60_000L
+        /** AUTO profile, whatever the activity mode: drowsy after 15 minutes without activity, asleep after 30. */
+        const val CAR_DROWSY_AFTER_MS = 15 * 60_000L
+        const val CAR_SLEEP_AFTER_MS = 30 * 60_000L
 
         /**
          * States a sharp turn may interrupt: ambient states and one-shots nobody asked for.
