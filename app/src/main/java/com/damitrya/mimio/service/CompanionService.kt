@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.damitrya.mimio.R
@@ -45,6 +46,8 @@ import com.damitrya.mimio.data.TimeData
 import com.damitrya.mimio.data.TimeDataProvider
 import com.damitrya.mimio.data.WeatherData
 import com.damitrya.mimio.data.WeatherDataProvider
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
+import com.damitrya.mimio.diagnostics.DrivingDiagnosticsRecorder
 import com.damitrya.mimio.overlay.OverlayManager
 import com.damitrya.mimio.state.ActivityDiagnostics
 import com.damitrya.mimio.state.AnimationDirector
@@ -127,6 +130,12 @@ class CompanionService : Service(),
 
     /** New usable GPS fixes for the braking detector. */
     private val speedGate = GpsFixGate()
+
+    /** Running driving-diagnostics recording (settings → AUTO → motion diagnostics), null when off. */
+    private var diagnostics: DrivingDiagnosticsRecorder? = null
+
+    /** The saved summary is being read before a recording (re)starts. */
+    private var diagnosticsStarting = false
     private lateinit var mood: CharacterMood
     private lateinit var director: AnimationDirector
     private lateinit var overlayManager: OverlayManager
@@ -170,6 +179,7 @@ class CompanionService : Service(),
             }
             SettingsRepository.KEY_ALERT_BRAKING_THRESHOLD ->
                 accelerometerMonitor.setThreshold(settings.alertBrakingThreshold)
+            SettingsRepository.KEY_DRIVING_DIAGNOSTICS -> syncDiagnostics()
         }
     }
 
@@ -196,6 +206,7 @@ class CompanionService : Service(),
         stateMachine.idleBusy = { director.isSceneRunning() }
         stateMachine.distractingScene = { director.isDistractingSceneRunning() }
         stateMachine.onSceneCut = { overlayManager.getCharacterView()?.cutScene() }
+        speedGate.onVerdict = { data, verdict -> DrivingDiagnostics.sink?.onGpsVerdict(data, verdict) }
         overlayManager = OverlayManager(this, settings)
         farewell = FarewellFlow(stateMachine, { overlayManager.isVisible() }, { hideOverlay() }, { showOverlay() })
 
@@ -300,6 +311,7 @@ class CompanionService : Service(),
         stateMachine.destroy()
         mood.flush()
         stopProviders()
+        syncDiagnostics()                  // the recording waits for the next start; nothing is lost
         overlayManager.hide()
         settings.serviceEnabled = false
         super.onDestroy()
@@ -321,6 +333,42 @@ class CompanionService : Service(),
             startAutoProviders()
         } else {
             startDailyProviders()
+        }
+        syncDiagnostics()
+    }
+
+    /**
+     * Records while the user's switch is on and the providers run. Switched off it ends the recording; the
+     * service stopping only pauses it, and the next start continues the same recording. The saved summary is
+     * read on the diagnostics thread, never here.
+     */
+    private fun syncDiagnostics() {
+        val wanted = settings.drivingDiagnosticsEnabled && providersStarted
+        val running = diagnostics
+        if (wanted && running == null && !diagnosticsStarting) {
+            diagnosticsStarting = true
+            val storage = DrivingDiagnostics.storage(this)
+            DrivingDiagnostics.io.execute {
+                val previous = DrivingDiagnostics.loadSummary(storage)
+                handler.post {
+                    diagnosticsStarting = false
+                    if (!settings.drivingDiagnosticsEnabled || !providersStarted || diagnostics != null) return@post
+                    val recorder = DrivingDiagnosticsRecorder(
+                        storage, DrivingDiagnostics.io, SystemClock::elapsedRealtime,
+                        // Full journal: the switch goes off (posted: not from inside the recorder's own call).
+                        onLimitReached = { handler.post { settings.drivingDiagnosticsEnabled = false } }
+                    )
+                    recorder.begin(previous, profileManager.getCurrentProfile().name, settings.alertBrakingThreshold)
+                    diagnostics = recorder
+                    DrivingDiagnostics.sink = recorder
+                    // Sensors registered before the recording began.
+                    (sensorProvider.registrations + accelerometerMonitor.registrations).forEach(recorder::onSensorRegistration)
+                }
+            }
+        } else if (!wanted && running != null) {
+            if (settings.drivingDiagnosticsEnabled) running.pause() else running.stop()
+            DrivingDiagnostics.sink = null
+            diagnostics = null
         }
     }
 
@@ -373,6 +421,7 @@ class CompanionService : Service(),
 
     // SensorDataProvider.Listener
     override fun onDrivingDataChanged(data: DrivingData) {
+        DrivingDiagnostics.sink?.onDrivingData(data)
         // Braking / turn events repeat the last fix: the braking detector learns only from new GPS
         // fixes, by the same rule as the state machine (GpsFixGate).
         if (speedGate.isNewUsableFix(data)) accelerometerMonitor.updateSpeed(data.speedKmh)
@@ -425,6 +474,8 @@ class CompanionService : Service(),
         if (providersStarted) {
             if (previousProfile == AppProfile.AUTO) stopAutoProviders() else stopDailyProviders()
         }
+
+        DrivingDiagnostics.sink?.onProfile(newProfile.name)
 
         // Switch state machine profile; running animation sequences (curled-up sleep) end with it
         director.reset()
@@ -484,7 +535,9 @@ class CompanionService : Service(),
 
     // StateMachine.Listener
     override fun onStateChanged(newState: CompanionState, previousState: CompanionState) {
-        overlayManager.getCharacterView()?.setState(newState)
+        val view = overlayManager.getCharacterView()
+        DrivingDiagnostics.sink?.onStateChanged(newState, previousState, shown = view != null && overlayManager.isVisible())
+        view?.setState(newState)
     }
 
     override fun onWeatherModifierChanged(modifier: WeatherModifier) {

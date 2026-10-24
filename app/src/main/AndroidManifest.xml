@@ -61,6 +61,23 @@
             </intent-filter>
         </activity>
 
+        <!-- Motion diagnostics (AUTO settings) -->
+        <activity
+            android:name=".ui.DrivingDiagnosticsActivity"
+            android:exported="false"
+            android:label="@string/section_driving_diagnostics" />
+
+        <!-- Shares exported diagnostics reports (cache/diagnostics_export only) with the Sharesheet -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/diagnostics_file_paths" />
+        </provider>
+
         <!-- Companion Foreground Service -->
         <service
             android:name=".service.CompanionService"

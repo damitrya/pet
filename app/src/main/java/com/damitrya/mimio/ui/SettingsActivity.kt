@@ -26,6 +26,7 @@ import com.damitrya.mimio.R
 import com.damitrya.mimio.data.HapticMode
 import com.damitrya.mimio.data.SettingsRepository
 import com.damitrya.mimio.databinding.ActivitySettingsBinding
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
 import com.damitrya.mimio.overlay.HapticPlayer
 import com.damitrya.mimio.overlay.TouchHaptics
 import com.damitrya.mimio.service.CompanionService
@@ -76,6 +77,9 @@ class SettingsActivity : AppCompatActivity() {
         setupDebugTools()
         setupProfileUI()
         setupDailySettingsUI()
+        binding.btnDrivingDiagnostics.setOnClickListener {
+            startActivity(Intent(this, DrivingDiagnosticsActivity::class.java))
+        }
         updatePermissionStatus()
         updateProfileVisibility()
     }
@@ -84,6 +88,7 @@ class SettingsActivity : AppCompatActivity() {
         super.onResume()
         updatePermissionStatus()
         updateServiceButton()
+        updateDrivingDiagnosticsStatus()
     }
 
     override fun onDestroy() {
@@ -442,6 +447,17 @@ class SettingsActivity : AppCompatActivity() {
         val isAutoOnly = settings.profileMode == "manual_auto"
         binding.cardDailySettings.visibility = if (isAutoOnly) View.GONE else View.VISIBLE
         binding.cardThresholds.visibility = if (settings.profileMode == "manual_daily") View.GONE else View.VISIBLE
+        binding.cardDrivingDiagnostics.visibility = binding.cardThresholds.visibility
+    }
+
+    private fun updateDrivingDiagnosticsStatus() {
+        binding.tvDrivingDiagnosticsStatus.setText(
+            when {
+                DrivingDiagnostics.sink?.isRunning == true -> R.string.diagnostics_status_recording
+                settings.drivingDiagnosticsEnabled -> R.string.diagnostics_status_waiting
+                else -> R.string.diagnostics_status_off
+            }
+        )
     }
 
     private fun setupThresholdInput() {

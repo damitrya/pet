@@ -15,6 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
+import com.damitrya.mimio.diagnostics.SensorRegistration
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -33,7 +35,15 @@ data class DrivingData(
     /** How old that fix was when this data was sent (the system may deliver cached locations). */
     val fixAgeMs: Long = 0L,
     /** Horizontal accuracy of the fix in metres, 0 = unknown. */
-    val accuracyM: Float = 0f
+    val accuracyM: Float = 0f,
+    /** The fix carried a speed (`Location.hasSpeed()`); without one [speedKmh] averages in 0. */
+    val hasSpeed: Boolean = true,
+    /** Speed accuracy of the fix in m/s, NaN = not reported. Diagnostics only. */
+    val speedAccuracyMps: Float = Float.NaN,
+    /** Speed of the fix itself, before the moving average of [speedKmh]. Diagnostics only. */
+    val rawSpeedKmh: Float = 0f,
+    /** Location provider of the fix ("gps", "network"). Diagnostics only. */
+    val provider: String = ""
 )
 
 enum class TurnDirection { LEFT, RIGHT, NONE }
@@ -55,6 +65,14 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private var fixSeq: Long = 0L
     private var fixElapsedMs: Long = 0L
     private var fixAccuracyM: Float = 0f
+    private var fixHasSpeed: Boolean = true
+    private var fixSpeedAccuracyMps: Float = Float.NaN
+    private var fixRawSpeedKmh: Float = 0f
+    private var fixProvider: String = ""
+
+    /** What [start] registered (shown by the driving diagnostics). */
+    var registrations: List<SensorRegistration> = emptyList()
+        private set
 
     // Accelerometer data for braking/acceleration detection
     private var lastAccelX: Float = 0f
@@ -106,7 +124,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private fun startLocationUpdates() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
-        ) return
+        ) {
+            report(SensorRegistration(OWNER, "LOCATION_PERMISSION", available = false, registered = false))
+            return
+        }
 
         try {
             locationManager.requestLocationUpdates(
@@ -116,7 +137,9 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
                 this,
                 Looper.getMainLooper()
             )
+            report(SensorRegistration(OWNER, "LOCATION_GPS", available = true, registered = true))
         } catch (e: Exception) {
+            report(SensorRegistration(OWNER, "LOCATION_GPS", available = false, registered = false))
             // GPS provider not available, try network
             try {
                 locationManager.requestLocationUpdates(
@@ -126,8 +149,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
                     this,
                     Looper.getMainLooper()
                 )
+                report(SensorRegistration(OWNER, "LOCATION_NETWORK", available = true, registered = true))
             } catch (_: Exception) {
                 // No location provider available
+                report(SensorRegistration(OWNER, "LOCATION_NETWORK", available = false, registered = false))
             }
         }
     }
@@ -137,15 +162,23 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         val gyroscope = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
         val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
-        accelerometer?.let {
+        val accelOk = accelerometer?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
-        gyroscope?.let {
+        val gyroOk = gyroscope?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
-        gravitySensor?.let {
+        val gravityOk = gravitySensor?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
+        report(SensorRegistration(OWNER, "LINEAR_ACCELERATION", accelerometer != null, accelOk == true))
+        report(SensorRegistration(OWNER, "GYROSCOPE", gyroscope != null, gyroOk == true))
+        report(SensorRegistration(OWNER, "GRAVITY", gravitySensor != null, gravityOk == true))
+    }
+
+    private fun report(registration: SensorRegistration) {
+        registrations = registrations.filter { it.sensor != registration.sensor } + registration
+        DrivingDiagnostics.sink?.onSensorRegistration(registration)
     }
 
     // LocationListener
@@ -156,6 +189,10 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         fixAccuracyM = if (location.hasAccuracy()) location.accuracy else 0f
         previousSpeed = currentSpeed
         val rawSpeed = location.speed * 3.6f // m/s to km/h
+        fixHasSpeed = location.hasSpeed()
+        fixSpeedAccuracyMps = if (location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else Float.NaN
+        fixRawSpeedKmh = rawSpeed
+        fixProvider = location.provider ?: ""
 
         // Simple moving average
         speedHistory[speedHistoryIndex % speedHistory.size] = rawSpeed
@@ -210,6 +247,8 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         // Rapid acceleration: strong positive longitudinal acceleration
         isRapidAccel = lastAccelY < -accelerationThreshold
 
+        DrivingDiagnostics.sink?.onLongitudinalSample(lastAccelY, accelerationThreshold, isRapidAccel)
+
         if (prevBraking != isBraking || prevAccel != isRapidAccel) {
             notifyListener()
         }
@@ -248,6 +287,7 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
             isTurning = false
             turnDirection = TurnDirection.NONE
         }
+        DrivingDiagnostics.sink?.onTurnSample(yawRate, lateral, currentSpeed, turnThreshold, isTurning, hasGps)
 
         if (prevTurning != isTurning || prevDirection != turnDirection) {
             notifyListener()
@@ -264,12 +304,18 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
             hasGpsFix = hasGps,
             fixSeq = fixSeq,
             fixAgeMs = if (fixSeq > 0) (SystemClock.elapsedRealtime() - fixElapsedMs).coerceAtLeast(0L) else 0L,
-            accuracyM = fixAccuracyM
+            accuracyM = fixAccuracyM,
+            hasSpeed = fixHasSpeed,
+            speedAccuracyMps = fixSpeedAccuracyMps,
+            rawSpeedKmh = fixRawSpeedKmh,
+            provider = fixProvider
         )
         handler.post { listener?.onDrivingDataChanged(data) }
     }
 
     companion object {
+        private const val OWNER = "SensorDataProvider"
+
         /** Lateral acceleration must stay above the threshold this long (bumps and jolts are shorter). */
         private const val TURN_SUSTAIN_NS = 300_000_000L
     }
