@@ -8,6 +8,8 @@ import android.hardware.SensorManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
+import com.damitrya.mimio.diagnostics.SensorRegistration
 
 /**
  * Feeds linear acceleration, gravity and GPS speed into [BrakeDetector] and reports sharp braking.
@@ -25,6 +27,10 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     private val handler = Handler(Looper.getMainLooper())
     private val detector = BrakeDetector()
 
+    /** What [start] registered (shown by the driving diagnostics). */
+    var registrations: List<SensorRegistration> = emptyList()
+        private set
+
     fun setListener(listener: Listener?) {
         this.listener = listener
     }
@@ -35,12 +41,19 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
 
     fun start() {
         detector.reset()
-        sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)?.let {
+        val linear = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+        val linearOk = linear?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
-        sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)?.let {
+        val gravity = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        val gravityOk = gravity?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
+        registrations = listOf(
+            SensorRegistration(OWNER, "LINEAR_ACCELERATION", linear != null, linearOk == true),
+            SensorRegistration(OWNER, "GRAVITY", gravity != null, gravityOk == true)
+        )
+        registrations.forEach { DrivingDiagnostics.sink?.onSensorRegistration(it) }
     }
 
     fun stop() {
@@ -50,15 +63,20 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
 
     /** GPS speed from [SensorDataProvider]; teaches the forward axis and confirms braking. */
     fun updateSpeed(speedKmh: Float) {
-        if (detector.onSpeed(speedKmh, SystemClock.elapsedRealtime())) notifyBraking()
+        val confirmed = detector.onSpeed(speedKmh, SystemClock.elapsedRealtime())
+        DrivingDiagnostics.sink?.onBrakeSpeed(detector, confirmed)
+        if (confirmed) notifyBraking()
     }
 
     override fun onSensorChanged(event: SensorEvent) {
         val v = event.values
         when (event.sensor.type) {
             Sensor.TYPE_GRAVITY -> detector.onGravity(v[0], v[1], v[2], SystemClock.elapsedRealtime())
-            Sensor.TYPE_LINEAR_ACCELERATION ->
-                if (detector.onLinearAcceleration(v[0], v[1], v[2], SystemClock.elapsedRealtime())) notifyBraking()
+            Sensor.TYPE_LINEAR_ACCELERATION -> {
+                val braking = detector.onLinearAcceleration(v[0], v[1], v[2], SystemClock.elapsedRealtime())
+                DrivingDiagnostics.sink?.onBrakeSample(detector, braking)
+                if (braking) notifyBraking()
+            }
         }
     }
 
@@ -67,4 +85,8 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private companion object {
+        const val OWNER = "AccelerometerMonitor"
+    }
 }

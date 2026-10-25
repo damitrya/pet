@@ -15,6 +15,9 @@ import com.damitrya.mimio.data.StepData
 import com.damitrya.mimio.data.TimeData
 import com.damitrya.mimio.data.TurnDirection
 import com.damitrya.mimio.data.WeatherData
+import com.damitrya.mimio.diagnostics.DiagnosticReason
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
+import com.damitrya.mimio.diagnostics.RequestResult
 import kotlin.random.Random
 
 /**
@@ -367,8 +370,15 @@ class StateMachine(
      * - Followed by RELIEF, then the saved looping state.
      */
     fun onAlertTriggered() {
-        if (alertActive) return
-        if (clock() < alertCooldownUntil) return
+        if (alertActive) {
+            diagRequest(CompanionState.ALERT, RequestResult.REJECTED, DiagnosticReason.STATE_BLOCKED, "ALERT already playing")
+            return
+        }
+        if (clock() < alertCooldownUntil) {
+            diagRequest(CompanionState.ALERT, RequestResult.REJECTED, DiagnosticReason.COOLDOWN_ACTIVE)
+            return
+        }
+        diagRequest(CompanionState.ALERT, RequestResult.STARTED, null)
 
         alertActive = true
         petActive = false
@@ -582,13 +592,16 @@ class StateMachine(
         if (!usable) return
 
         val moving = isConfirmedMoving()
+        if (moving != wasMoving) DrivingDiagnostics.sink?.onMovement(moving, data.speedKmh, parked)
         if (moving && !wasMoving) onStartedMoving()
         wasMoving = moving
 
         val firstFix = awaitingFirstFix
         awaitingFirstFix = false
 
-        if (profile == AppProfile.AUTO && trip.onGps(data.speedKmh, lastSpeedAt) == TripEvent.ARRIVED) arrivalDueAt = now
+        val tripEvent = if (profile == AppProfile.AUTO) trip.onGps(data.speedKmh, lastSpeedAt) else TripEvent.NONE
+        DrivingDiagnostics.sink?.onTripEvent(tripEvent)
+        if (tripEvent == TripEvent.ARRIVED) arrivalDueAt = now
         playArrival()
 
         if (data.speedKmh < STOPPED_KMH) {
@@ -602,6 +615,7 @@ class StateMachine(
             if (parked && data.speedKmh >= MOVING_KMH) {
                 if (departedAt == 0L) departedAt = now
                 if (now - departedAt > TRIP_START_RETRY_MS) {
+                    diagRequest(CompanionState.TRIP_START, RequestResult.CANCELLED, DiagnosticReason.STATE_BLOCKED, "retry window over")
                     parked = false       // too late to celebrate the departure
                 } else if (onTripStarted()) {
                     parked = false
@@ -617,10 +631,29 @@ class StateMachine(
      */
     private fun onSharpTurn(direction: TurnDirection) {
         if (direction == TurnDirection.NONE) return
-        if (currentState !in TURN_INTERRUPTIBLE) return
+        val turn = if (direction == TurnDirection.LEFT) CompanionState.TURN_LEFT else CompanionState.TURN_RIGHT
+        if (currentState !in TURN_INTERRUPTIBLE) {
+            diagRequest(turn, RequestResult.REJECTED, DiagnosticReason.STATE_BLOCKED, "state $currentState")
+            return
+        }
         val now = clock()
-        if (now - turnAt < TURN_COOLDOWN_MS) return
-        if (lastSpeedKmh < TURN_MIN_KMH || now - lastSpeedAt > GPS_STALE_MS) return
+        if (now - turnAt < TURN_COOLDOWN_MS) {
+            diagRequest(turn, RequestResult.REJECTED, DiagnosticReason.COOLDOWN_ACTIVE)
+            return
+        }
+        if (lastSpeedKmh < TURN_MIN_KMH || now - lastSpeedAt > GPS_STALE_MS) {
+            diagRequest(
+                turn, RequestResult.REJECTED,
+                when {
+                    lastSpeedAt == 0L -> DiagnosticReason.GPS_MISSING
+                    now - lastSpeedAt > GPS_STALE_MS -> DiagnosticReason.GPS_STALE
+                    else -> DiagnosticReason.SPEED_BELOW_THRESHOLD
+                },
+                if (lastSpeedAt == 0L) "no usable GPS fix yet" else "usable speed ${lastSpeedKmh.toInt()} km/h, min ${TURN_MIN_KMH.toInt()}"
+            )
+            return
+        }
+        diagRequest(turn, RequestResult.STARTED, null)
         turnAt = now
         lastActivityAt = now
         rememberBaseState()
@@ -640,6 +673,7 @@ class StateMachine(
             // only after parking — a stop of a minute or two is too short for TRIP_START, yet long enough to doze.
             // Leaving a parking spot at trip speed plays TRIP_START in this same update instead (straight out of sleep).
             CompanionState.SLEEP, CompanionState.FALL_ASLEEP -> if (profile == AppProfile.AUTO && !(parked && lastSpeedKmh >= MOVING_KMH)) {
+                diagRequest(CompanionState.WAKE, RequestResult.STARTED, null, "the car started moving")
                 lastActivityAt = clock()
                 transitionTo(CompanionState.WAKE)
             }
@@ -659,10 +693,19 @@ class StateMachine(
         val due = arrivalDueAt
         if (due == 0L) return
         if (clock() - due > ARRIVAL_RETRY_MS || isConfirmedMoving()) {
+            diagRequest(
+                CompanionState.ARRIVAL, RequestResult.CANCELLED,
+                if (isConfirmedMoving()) null else DiagnosticReason.STATE_BLOCKED,
+                if (isConfirmedMoving()) "the car moves again" else "retry window over"
+            )
             arrivalDueAt = 0L
             return
         }
-        if (alertActive || petActive) return
+        if (alertActive || petActive) {
+            diagRequest(CompanionState.ARRIVAL, RequestResult.DEFERRED, DiagnosticReason.STATE_BLOCKED, if (alertActive) "ALERT playing" else "PET playing")
+            return
+        }
+        diagRequest(CompanionState.ARRIVAL, RequestResult.STARTED, null)
         arrivalDueAt = 0L
         lastActivityAt = clock()
         mood?.onEvent(MoodEvent.ARRIVAL)
@@ -673,13 +716,22 @@ class StateMachine(
 
     /** Plays TRIP_START; returns false if a higher-priority state (ALERT, PET) blocked it. */
     private fun onTripStarted(): Boolean {
-        if (alertActive || petActive) return false
+        if (alertActive || petActive) {
+            diagRequest(CompanionState.TRIP_START, RequestResult.DEFERRED, DiagnosticReason.STATE_BLOCKED, if (alertActive) "ALERT playing" else "PET playing")
+            return false
+        }
+        diagRequest(CompanionState.TRIP_START, RequestResult.STARTED, null)
         lastActivityAt = clock()
         mood?.onEvent(MoodEvent.TRIP_START)
         tapQueued = false
         rememberBaseState()
         transitionTo(CompanionState.TRIP_START)
         return true
+    }
+
+    /** Tells the driving diagnostics (if recording) what became of a car reaction. */
+    private fun diagRequest(state: CompanionState, result: RequestResult, reason: DiagnosticReason?, detail: String? = null) {
+        DrivingDiagnostics.sink?.onAnimationRequest(state.name, result, reason, detail)
     }
 
     /**

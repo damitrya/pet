@@ -34,6 +34,9 @@ class SettingsRepository(private val prefs: SharedPreferences) {
         const val KEY_STOPPED_LOW_BATTERY = "stopped_for_low_battery"
         const val KEY_ACTIVITY_MODE = "activity_mode"
 
+        /** Driving diagnostics recording (AUTO settings → "Motion diagnostics"); off by default. */
+        const val KEY_DRIVING_DIAGNOSTICS = "driving_diagnostics_enabled"
+
         // Profile
         const val KEY_ACTIVE_PROFILE = "active_profile"
         const val KEY_PROFILE_MODE = "profile_mode"
@@ -216,6 +219,10 @@ class SettingsRepository(private val prefs: SharedPreferences) {
     var alertBrakingThreshold: Float
         get() = prefs.getFloat(KEY_ALERT_BRAKING_THRESHOLD, DEFAULT_ALERT_BRAKING_THRESHOLD)
         set(value) = prefs.edit().putFloat(KEY_ALERT_BRAKING_THRESHOLD, value).apply()
+
+    var drivingDiagnosticsEnabled: Boolean
+        get() = prefs.getBoolean(KEY_DRIVING_DIAGNOSTICS, false)
+        set(value) = prefs.edit().putBoolean(KEY_DRIVING_DIAGNOSTICS, value).apply()
 
     // Time ranges (hours)
     var morningStart: Int

@@ -15,6 +15,7 @@ import android.widget.ImageView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
 import com.damitrya.mimio.data.SettingsRepository
+import com.damitrya.mimio.diagnostics.DrivingDiagnostics
 import com.damitrya.mimio.state.AnimationDirector
 import com.damitrya.mimio.state.AnimationPools
 import com.damitrya.mimio.state.AnimationVariant
@@ -142,6 +143,7 @@ class CharacterView @JvmOverloads constructor(
         val director = director
         val variant = if (director != null) director.pick(state, isAvailable) else pool.pick(isAvailable)
         val resId = variant?.let { resolveVariant(it) } ?: 0
+        DrivingDiagnostics.sink?.onPlayback(state, if (resId == 0) null else variant?.resName)
         if (resId == 0) {
             setFallbackAnimation(state)
             // Nothing to play: a one-shot must still end, or the state machine would wait for it.

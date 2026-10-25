@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exported driving-diagnostics reports only (cache/diagnostics_export), shared through the Sharesheet. -->
+<paths>
+    <cache-path name="diagnostics" path="diagnostics_export/" />
+</paths>
