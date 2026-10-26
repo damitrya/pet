@@ -13,10 +13,15 @@ import com.damitrya.mimio.diagnostics.SensorRegistration
 
 /**
  * Feeds linear acceleration, gravity and GPS speed into [BrakeDetector] and reports sharp braking.
- * Works for any phone mount; see [BrakeDetector] for how the car's forward axis is learned.
+ * Works for any phone mount; see [BrakeDetector] for how the car's forward axis is learned (in the app: the
+ * [VehicleFrameEstimator] of the car physics).
  * Cooldown and playback-guard logic is handled by [com.damitrya.mimio.state.StateMachine].
  */
-class AccelerometerMonitor(context: Context) : SensorEventListener {
+class AccelerometerMonitor(
+    context: Context,
+    /** The car axis shared with [SensorDataProvider]'s [CarMotionTracker] (null: the detector learns its own). */
+    frame: VehicleFrameEstimator? = null
+) : SensorEventListener {
 
     interface Listener {
         fun onSharpBraking()
@@ -25,7 +30,7 @@ class AccelerometerMonitor(context: Context) : SensorEventListener {
     private var listener: Listener? = null
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val handler = Handler(Looper.getMainLooper())
-    private val detector = BrakeDetector()
+    private val detector = BrakeDetector(frame = frame)
 
     /** What [start] registered (shown by the driving diagnostics). */
     var registrations: List<SensorRegistration> = emptyList()

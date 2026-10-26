@@ -3882,8 +3882,8 @@ def cloud_farewell(i, n):
 
 def _inertia(kind):
     """
-    The car pulls the fox one way and it leans with a little delay, then settles back (preview only: not wired
-    to GPS / accelerometer / gyroscope yet). The body follows the push on a spring, the head lags more, the ears
+    The car pulls the fox one way and it leans with a little delay, then settles back (wave 7: the INERTIA_* states,
+    driven by the car physics in the app). The body follows the push on a spring, the head lags more, the ears
     and the tail most — so they trail behind and overshoot a little on the way back.
     """
     def pose(i, n):
@@ -4110,8 +4110,8 @@ USAGE = {
     "microphone": "MUSIC · rare scene", "guitar": "MUSIC · rare scene", "tail_back": "CALM · scene, not while driving",
     "bayan": "MUSIC · rare scene", "balalaika": "MUSIC · rare scene", "punk": "MUSIC · rare scene, not while driving",
     "battery_sad": "BATTERY_CRITICAL (10 %)", "cloud_farewell": "BATTERY_SHUTDOWN (1 %, then Mimio stops)",
-    "inertia_left": "preview only (no trigger yet)", "inertia_right": "preview only (no trigger yet)",
-    "inertia_forward": "preview only (no trigger yet)", "inertia_back": "preview only (no trigger yet)",
+    "inertia_left": "AUTO · INERTIA_LEFT (the car turns right)", "inertia_right": "AUTO · INERTIA_RIGHT (the car turns left)",
+    "inertia_forward": "AUTO · INERTIA_FORWARD (braking)", "inertia_back": "AUTO · INERTIA_BACK (speeding up)",
 }
 
 EDGE_ALPHA_MAX = 8       # opacity allowed in the outermost pixel row/column (anti-aliasing only)

@@ -289,19 +289,20 @@ class DrivingDiagnosticsRecorderTest {
     }
 
     @Test
-    fun hardAccelerationHasNoReaction() {
+    fun hardAccelerationAlongTheCarAxis() {
         val rec = recorder()
         rec.begin(null, "AUTO", -4f)
-        rec.onLongitudinalSample(-4f, 3.5f, rapid = true)
-        repeat(20) { rec.onLongitudinalSample(0f, 3.5f, false); clock.advance(20) }
-        rec.onLongitudinalSample(-2.5f, 3.5f, rapid = false)
-        repeat(20) { rec.onLongitudinalSample(0f, 3.5f, false); clock.advance(20) }
+        rec.onLongitudinalSample(3f, 2.5f, rapid = true)
+        repeat(20) { rec.onLongitudinalSample(0f, 2.5f, false); clock.advance(20) }
+        rec.onLongitudinalSample(2f, 2.5f, rapid = false)
+        repeat(20) { rec.onLongitudinalSample(0f, 2.5f, false); clock.advance(20) }
         val s = rec.snapshot()
         assertEquals(2L, s.accelCandidates)
         assertEquals(1L, s.accelDetected)
         assertEquals(1L, s.accelReasons["ACCELERATION_BELOW_THRESHOLD"])
-        assertEquals(1L, s.requests["HARD_ACCELERATION REJECTED ANIMATION_NOT_CONFIGURED"])
-        assertTrue(journal.contains("reason=ANIMATION_NOT_CONFIGURED"))
+        // Wave 7: an intensive start plays INERTIA_BACK, so there is no "not configured" request any more.
+        assertTrue(s.requests.keys.none { it.startsWith("HARD_ACCELERATION") })
+        assertTrue(journal.contains("acceleration=3.0 m/s2\nthreshold=2.5 m/s2\naxis=vehicle"))
     }
 
     @Test

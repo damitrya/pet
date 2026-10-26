@@ -74,7 +74,7 @@ class DrivingDiagnosticsHooksTest {
             sm.updateDrivingData(sensorEvent(base, isTurning = true, turnDirection = dir))
             sm.updateDrivingData(sensorEvent(base, isTurning = false))
         }
-        val slow = gpsFix(15f)
+        val slow = gpsFix(6f)          // under the 8 km/h of wave 7 (was 20 km/h)
         sm.updateDrivingData(slow)
         turn(slow)
         assertEquals(1L, requests("TURN_LEFT REJECTED SPEED_BELOW_THRESHOLD"))
@@ -123,6 +123,8 @@ class DrivingDiagnosticsHooksTest {
         assertEquals(1L, s.movementStarts)
         assertEquals(1L, s.tripDepartures)
         assertEquals(1L, requests("TRIP_START STARTED"))
+        sm.updateDrivingData(gpsFix(0f))
+        assertEquals("one standing fix is no stop yet (wave 7 hysteresis)", 0L, recorder.snapshot().movementStops)
         sm.updateDrivingData(gpsFix(0f))
         assertEquals(1L, recorder.snapshot().movementStops)
         assertTrue(storage.journal.contains("MOVEMENT_START\nspeed=30.0 km/h\nparkedBefore=true"))
