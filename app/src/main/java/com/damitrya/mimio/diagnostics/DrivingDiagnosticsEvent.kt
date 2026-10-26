@@ -13,7 +13,7 @@ import java.util.Locale
  * - [LOCATION_INACCURATE]: horizontal accuracy worse than [com.damitrya.mimio.data.GpsFixGate.MAX_ACCURACY_M].
  * - [SPEED_UNAVAILABLE]: the fix carries no speed (`Location.hasSpeed()` false). The code does not check this —
  *   such a fix is accepted with speed 0 — so it is only a warning on GPS_FIX, never a rejection.
- * - [SPEED_BELOW_THRESHOLD]: the speed is under the check's minimum (braking 8 km/h, turn reaction 20 km/h).
+ * - [SPEED_BELOW_THRESHOLD]: the speed is under the check's minimum (braking, turns and leans: 8 km/h).
  * - [SENSOR_UNAVAILABLE]: the device has no such sensor, or registering its listener failed.
  * - [CALIBRATION_PENDING]: the braking detector has not learned the car's forward axis yet; a jolt waits for
  *   GPS to confirm the car slowed down.
@@ -23,6 +23,14 @@ import java.util.Locale
  * - [STATE_BLOCKED]: the character's current state does not let the reaction start.
  * - [ANIMATION_NOT_CONFIGURED]: nothing reacts to the event, or no animation file exists for the state.
  * - [OVERLAY_HIDDEN]: the state changed, but the overlay is hidden, so nothing is visible.
+ *
+ * Wave 7 (car physics, see [com.damitrya.mimio.data.CarMotionTracker]):
+ * - [PHONE_MOVING]: the phone is probably being moved relative to the car (handled, turned, taken out of the holder).
+ * - [CALIBRATION_UNRELIABLE]: the car's forward axis is not known well enough for a longitudinal lean.
+ * - [INERTIA_COOLDOWN]: a lean played less than 4 s ago.
+ * - [EVENT_TOO_SHORT]: a manoeuvre crossed its threshold, but not for the required 300 ms.
+ * - [SENSOR_DATA_INCONSISTENT]: accelerometer and GPS speed changes keep contradicting each other.
+ * - [REACTIONS_DISABLED]: the user switched the leans and sharp-turn reactions off (settings → AUTO).
  */
 enum class DiagnosticReason {
     GPS_MISSING,
@@ -37,7 +45,13 @@ enum class DiagnosticReason {
     COOLDOWN_ACTIVE,
     STATE_BLOCKED,
     ANIMATION_NOT_CONFIGURED,
-    OVERLAY_HIDDEN
+    OVERLAY_HIDDEN,
+    PHONE_MOVING,
+    CALIBRATION_UNRELIABLE,
+    INERTIA_COOLDOWN,
+    EVENT_TOO_SHORT,
+    SENSOR_DATA_INCONSISTENT,
+    REACTIONS_DISABLED
 }
 
 /** What became of a request for a car reaction. */
@@ -82,6 +96,10 @@ data class DrivingDiagnosticsEvent(
         BRAKE_CANDIDATE,
         TURN_CANDIDATE,
         ACCEL_CANDIDATE,
+        INERTIA_CANDIDATE,
+        PHONE_MOTION,
+        INERTIA_START,
+        INERTIA_END,
         ANIMATION_REQUEST,
         STATE_CHANGE,
         PLAYBACK,

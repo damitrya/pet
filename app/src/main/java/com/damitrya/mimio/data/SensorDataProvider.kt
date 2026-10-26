@@ -17,8 +17,6 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.damitrya.mimio.diagnostics.DrivingDiagnostics
 import com.damitrya.mimio.diagnostics.SensorRegistration
-import kotlin.math.abs
-import kotlin.math.sqrt
 
 data class DrivingData(
     val speedKmh: Float = 0f,
@@ -48,10 +46,23 @@ data class DrivingData(
 
 enum class TurnDirection { LEFT, RIGHT, NONE }
 
-class SensorDataProvider(private val context: Context) : SensorEventListener, LocationListener {
+/**
+ * GPS and the motion sensors of the AUTO profile. Location fixes become [DrivingData]; the samples of the linear
+ * accelerometer, the gyroscope and the gravity sensor go to [tracker] ([CarMotionTracker], wave 7), whose sharp turns
+ * set [DrivingData.isTurning] and whose leans reach [Listener.onCarMotion]. The usable GPS speeds reach the tracker
+ * from the service (through [GpsFixGate], like everything else).
+ */
+class SensorDataProvider(
+    private val context: Context,
+    /** The car physics; shared with [AccelerometerMonitor] (its braking detector uses the same car axis). */
+    val tracker: CarMotionTracker = CarMotionTracker()
+) : SensorEventListener, LocationListener, CarMotionTracker.Listener {
 
     interface Listener {
         fun onDrivingDataChanged(data: DrivingData)
+
+        /** An ordinary or intensive manoeuvre the character may lean with (see [CarMotionTracker]). */
+        fun onCarMotion(event: CarMotionEvent) {}
     }
 
     private var listener: Listener? = null
@@ -60,7 +71,6 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     private val handler = Handler(Looper.getMainLooper())
 
     private var currentSpeed: Float = 0f
-    private var previousSpeed: Float = 0f
     private var hasGps: Boolean = false
     private var fixSeq: Long = 0L
     private var fixElapsedMs: Long = 0L
@@ -74,37 +84,30 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     var registrations: List<SensorRegistration> = emptyList()
         private set
 
-    // Accelerometer data for braking/acceleration detection
-    private var lastAccelX: Float = 0f
-    private var lastAccelY: Float = 0f
-    private var lastAccelZ: Float = 0f
-    private var isBraking: Boolean = false
-    private var isRapidAccel: Boolean = false
-
-    // Gyroscope data for turn detection
+    /** Sharp turn of the car (from [tracker]). */
     private var isTurning: Boolean = false
     private var turnDirection: TurnDirection = TurnDirection.NONE
 
-    // Gravity direction (phone coordinates), used to get the yaw rate whatever the phone mount
-    private val gravity = FloatArray(3)
-    private var hasGravity: Boolean = false
-    private var yawRate: Float = 0f            // rad/s, filtered; positive = turning left
-    private var turnCandidateSince: Long = 0L  // sensor timestamp (ns) when the threshold was first exceeded
-
-    // Thresholds
-    private var brakingThreshold: Float = 4.0f  // m/s² longitudinal deceleration
-    private var accelerationThreshold: Float = 3.5f
-    private var turnThreshold: Float = 3.5f  // m/s² lateral acceleration (speed × yaw rate)
+    /** Sensor timestamps on the elapsedRealtime clock of the GPS speeds. */
+    private val sensorClock = SensorClock()
 
     // Smoothing
     private val speedHistory = FloatArray(3)
     private var speedHistoryIndex = 0
+
+    init {
+        tracker.listener = this
+    }
 
     fun setListener(listener: Listener?) {
         this.listener = listener
     }
 
     fun start() {
+        tracker.reset()
+        sensorClock.reset()
+        isTurning = false
+        turnDirection = TurnDirection.NONE
         startLocationUpdates()
         startSensorUpdates()
     }
@@ -113,12 +116,6 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         locationManager.removeUpdates(this)
         sensorManager.unregisterListener(this)
         handler.removeCallbacksAndMessages(null)
-    }
-
-    fun updateThresholds(braking: Float, acceleration: Float, turn: Float) {
-        brakingThreshold = braking
-        accelerationThreshold = acceleration
-        turnThreshold = turn
     }
 
     private fun startLocationUpdates() {
@@ -187,7 +184,6 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         fixSeq++
         fixElapsedMs = location.elapsedRealtimeNanos / 1_000_000L
         fixAccuracyM = if (location.hasAccuracy()) location.accuracy else 0f
-        previousSpeed = currentSpeed
         val rawSpeed = location.speed * 3.6f // m/s to km/h
         fixHasSpeed = location.hasSpeed()
         fixSpeedAccuracyMps = if (location.hasSpeedAccuracy()) location.speedAccuracyMetersPerSecond else Float.NaN
@@ -208,6 +204,7 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         if (provider == LocationManager.GPS_PROVIDER) {
             hasGps = false
             currentSpeed = 0f
+            tracker.onGpsLost()
             notifyListener()
         }
     }
@@ -215,92 +212,36 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
     @Deprecated("Deprecated in API")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
 
-    // SensorEventListener
+    // SensorEventListener: light work only (a few multiplications per sample), no allocation, no I/O.
     override fun onSensorChanged(event: SensorEvent) {
+        val v = event.values
+        val at = sensorClock.toElapsedMs(event.timestamp, SystemClock.elapsedRealtime())
         when (event.sensor.type) {
-            Sensor.TYPE_LINEAR_ACCELERATION -> handleAccelerometer(event)
-            Sensor.TYPE_GYROSCOPE -> handleGyroscope(event)
-            Sensor.TYPE_GRAVITY -> {
-                event.values.copyInto(gravity, endIndex = 3)
-                hasGravity = true
-            }
+            Sensor.TYPE_LINEAR_ACCELERATION -> tracker.onLinearAcceleration(v[0], v[1], v[2], at)
+            Sensor.TYPE_GYROSCOPE -> tracker.onGyro(v[0], v[1], v[2], at)
+            Sensor.TYPE_GRAVITY -> tracker.onGravity(v[0], v[1], v[2], at)
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
-    private fun handleAccelerometer(event: SensorEvent) {
-        val x = event.values[0]  // lateral
-        val y = event.values[1]  // longitudinal (forward/backward)
-        val z = event.values[2]  // vertical
-
-        // Low-pass filter
-        lastAccelX = lastAccelX * 0.8f + x * 0.2f
-        lastAccelY = lastAccelY * 0.8f + y * 0.2f
-        lastAccelZ = lastAccelZ * 0.8f + z * 0.2f
-
-        val prevBraking = isBraking
-        val prevAccel = isRapidAccel
-
-        // Braking: strong negative longitudinal acceleration
-        isBraking = lastAccelY > brakingThreshold
-        // Rapid acceleration: strong positive longitudinal acceleration
-        isRapidAccel = lastAccelY < -accelerationThreshold
-
-        DrivingDiagnostics.sink?.onLongitudinalSample(lastAccelY, accelerationThreshold, isRapidAccel)
-
-        if (prevBraking != isBraking || prevAccel != isRapidAccel) {
-            notifyListener()
-        }
+    // CarMotionTracker.Listener (called from onSensorChanged, main thread)
+    override fun onCarMotion(event: CarMotionEvent) {
+        handler.post { listener?.onCarMotion(event) }
     }
 
-    /**
-     * A turn is sharp when the lateral acceleration (GPS speed × yaw rate) stays above
-     * [turnThreshold] for [TURN_SUSTAIN_NS]. The yaw rate is the rotation around the gravity
-     * vector, so it does not depend on how the phone is mounted (flat, upright, landscape).
-     */
-    private fun handleGyroscope(event: SensorEvent) {
-        val rawYaw = if (hasGravity) {
-            val g = sqrt(gravity[0] * gravity[0] + gravity[1] * gravity[1] + gravity[2] * gravity[2])
-            if (g > 1f) {
-                (event.values[0] * gravity[0] + event.values[1] * gravity[1] + event.values[2] * gravity[2]) / g
-            } else {
-                event.values[2]
-            }
-        } else {
-            event.values[2]  // no gravity sensor: assume the phone lies flat
-        }
-        yawRate = yawRate * 0.8f + rawYaw * 0.2f
-
-        val prevTurning = isTurning
-        val prevDirection = turnDirection
-
-        val lateral = abs(yawRate) * currentSpeed / 3.6f
-        if (lateral > turnThreshold) {
-            if (turnCandidateSince == 0L) turnCandidateSince = event.timestamp
-            if (event.timestamp - turnCandidateSince >= TURN_SUSTAIN_NS) {
-                isTurning = true
-                turnDirection = if (yawRate > 0) TurnDirection.LEFT else TurnDirection.RIGHT
-            }
-        } else {
-            turnCandidateSince = 0L
-            isTurning = false
-            turnDirection = TurnDirection.NONE
-        }
-        DrivingDiagnostics.sink?.onTurnSample(yawRate, lateral, currentSpeed, turnThreshold, isTurning, hasGps)
-
-        if (prevTurning != isTurning || prevDirection != turnDirection) {
-            notifyListener()
-        }
+    override fun onSharpTurnChanged(turning: Boolean, direction: TurnDirection) {
+        isTurning = turning
+        turnDirection = direction
+        notifyListener()
     }
 
     private fun notifyListener() {
         val data = DrivingData(
             speedKmh = currentSpeed,
-            isBraking = isBraking,
             isTurning = isTurning,
             turnDirection = turnDirection,
-            isRapidAcceleration = isRapidAccel,
+            isRapidAcceleration = tracker.isStrongAcceleration,
             hasGpsFix = hasGps,
             fixSeq = fixSeq,
             fixAgeMs = if (fixSeq > 0) (SystemClock.elapsedRealtime() - fixElapsedMs).coerceAtLeast(0L) else 0L,
@@ -313,10 +254,36 @@ class SensorDataProvider(private val context: Context) : SensorEventListener, Lo
         handler.post { listener?.onDrivingDataChanged(data) }
     }
 
-    companion object {
-        private const val OWNER = "SensorDataProvider"
+    private companion object {
+        const val OWNER = "SensorDataProvider"
+    }
+}
 
-        /** Lateral acceleration must stay above the threshold this long (bumps and jolts are shorter). */
-        private const val TURN_SUSTAIN_NS = 300_000_000L
+/**
+ * Maps sensor event timestamps (nanoseconds, a clock the device chooses) onto elapsedRealtime milliseconds, the clock
+ * of the GPS speeds. The offset is the smallest delivery delay seen (events are never delivered before they happen);
+ * a jump of more than [RESYNC_MS] (a device whose clock differs) starts over. Durations between samples keep the
+ * sensor's own precision even when events arrive in bursts.
+ */
+internal class SensorClock {
+    private var offset = 0L
+    private var synced = false
+
+    fun reset() {
+        synced = false
+    }
+
+    fun toElapsedMs(eventNs: Long, deliveredMs: Long): Long {
+        val eventMs = eventNs / 1_000_000L
+        val delay = deliveredMs - eventMs
+        if (!synced || delay < offset || delay - offset > RESYNC_MS) {
+            offset = delay
+            synced = true
+        }
+        return eventMs + offset
+    }
+
+    private companion object {
+        const val RESYNC_MS = 5_000L
     }
 }

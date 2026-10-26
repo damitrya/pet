@@ -27,6 +27,7 @@ import com.damitrya.mimio.data.BatteryData
 import com.damitrya.mimio.data.BatteryDataProvider
 import com.damitrya.mimio.data.AccelerometerMonitor
 import com.damitrya.mimio.data.BluetoothTrigger
+import com.damitrya.mimio.data.CarMotionEvent
 import com.damitrya.mimio.data.DrivingData
 import com.damitrya.mimio.data.GpsFixGate
 import com.damitrya.mimio.data.MediaData
@@ -188,8 +189,9 @@ class CompanionService : Service(),
 
         settings = SettingsRepository(this)
         profileManager = ProfileManager(this, settings)
-        accelerometerMonitor = AccelerometerMonitor(this)
         sensorProvider = SensorDataProvider(this)
+        // One car axis for the leans and the braking alert.
+        accelerometerMonitor = AccelerometerMonitor(this, sensorProvider.tracker.frame)
         mediaProvider = MediaStateProvider(this)
         mood = CharacterMood(PrefsMoodStore(this))
         stateMachine = StateMachine(settings, mood = mood)
@@ -424,8 +426,17 @@ class CompanionService : Service(),
         DrivingDiagnostics.sink?.onDrivingData(data)
         // Braking / turn events repeat the last fix: the braking detector learns only from new GPS
         // fixes, by the same rule as the state machine (GpsFixGate).
-        if (speedGate.isNewUsableFix(data)) accelerometerMonitor.updateSpeed(data.speedKmh)
+        if (speedGate.isNewUsableFix(data)) {
+            accelerometerMonitor.updateSpeed(data.speedKmh)
+            // The car physics learns from the fix's own speed at the fix's time (not the moving average); a fix
+            // without a speed would read as a stop.
+            if (data.hasSpeed) sensorProvider.tracker.onSpeed(data.rawSpeedKmh, SystemClock.elapsedRealtime() - data.fixAgeMs)
+        }
         stateMachine.updateDrivingData(data)
+    }
+
+    override fun onCarMotion(event: CarMotionEvent) {
+        stateMachine.onCarMotion(event)
     }
 
     // MediaStateProvider.Listener

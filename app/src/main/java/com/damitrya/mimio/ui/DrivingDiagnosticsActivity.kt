@@ -140,9 +140,16 @@ class DrivingDiagnosticsActivity : AppCompatActivity() {
             R.string.metric_gps_accepted to "${s.gpsAccepted}",
             R.string.metric_gps_rejected to "${s.gpsRejected}",
             R.string.metric_calibration to s.calibration.ifEmpty { unknown },
+            R.string.metric_vehicle_axis to if (s.vehicleCalibration.isEmpty()) unknown else
+                s.vehicleCalibration + (if (s.vehicleQuality.isNaN()) "" else " (${"%.2f".format(java.util.Locale.US, s.vehicleQuality)})"),
+            R.string.metric_phone_moving to "${s.phoneMovingEpisodes}",
             R.string.metric_brakes to "${s.brakeDetected}",
             R.string.metric_turns to getString(R.string.metric_turns_value, s.turnDetected, s.turnLeft, s.turnRight),
             R.string.metric_accels to "${s.accelDetected}",
+            R.string.metric_leans to getString(
+                R.string.metric_leans_value, s.inertiaPlayed.values.sum(),
+                s.inertiaCandidates.values.sum() - s.inertiaAccepted.values.sum()
+            ),
             R.string.metric_reactions to "${s.reactionsPlayed}"
         )
         fillTable(rows)
@@ -231,7 +238,7 @@ class DrivingDiagnosticsActivity : AppCompatActivity() {
                 "profileMode" to settings.profileMode,
                 "alertBrakingThreshold" to "${settings.alertBrakingThreshold} m/s2",
                 "musicReactionEnabled" to "${settings.musicReactionEnabled}",
-                "sensorReactionEnabled" to "${settings.sensorReactionEnabled} (not read by the car code)",
+                "sensorReactionEnabled" to "${settings.sensorReactionEnabled} (leans and sharp turns; ALERT always plays)",
                 "serviceEnabled" to "${settings.serviceEnabled}"
             )
         )

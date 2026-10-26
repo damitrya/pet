@@ -425,15 +425,17 @@ class FoxGeneratorTest(unittest.TestCase):
         self.assertLess(early["lean"], 0)
         self.assertGreater(early["ear_l"], 0)
 
-    def test_inertia_is_preview_only(self):
-        kt = os.path.join(os.path.dirname(__file__), "..", "..", "app", "src", "main", "java", "com", "damitrya",
-                          "mimio", "state", "AnimationPool.kt")
-        with open(kt, encoding="utf-8") as fh:
+    def test_inertia_leans_play_in_the_car(self):
+        # Wave 7: the leans left the preview-only list and play as the INERTIA_* states.
+        kt_dir = os.path.join(os.path.dirname(__file__), "..", "..", "app", "src", "main", "java", "com", "damitrya",
+                              "mimio", "state")
+        with open(os.path.join(kt_dir, "AnimationPool.kt"), encoding="utf-8") as fh:
             src = fh.read()
         line = next(ln for ln in src.splitlines() if "val PREVIEW_ONLY" in ln)
         for name in ("inertia_left", "inertia_right", "inertia_forward", "inertia_back"):
-            self.assertIn(f'"{name}"', line)
-
+            self.assertNotIn(f'"{name}"', line)
+            self.assertIn(f'single("{name}"', src)
+            self.assertNotIn("preview only", g.USAGE[name])
 
 if __name__ == "__main__":
     unittest.main()

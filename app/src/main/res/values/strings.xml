@@ -51,7 +51,7 @@
 
     <!-- Behavior -->
     <string name="label_music_reaction">Реакция на музыку</string>
-    <string name="label_sensor_reaction">Реакция на торможение и повороты</string>
+    <string name="label_sensor_reaction">Наклоны при поворотах, разгоне и торможении</string>
     <string name="label_haptics">Тактильная отдача</string>
     <string name="label_auto_start">Автозапуск при включении</string>
 
@@ -162,6 +162,10 @@
     <string name="metric_brakes">Обнаружено торможений</string>
     <string name="metric_turns">Обнаружено поворотов</string>
     <string name="metric_accels">Обнаружено резких разгонов</string>
+    <string name="metric_vehicle_axis">Направление движения (калибровка)</string>
+    <string name="metric_phone_moving">Телефон перемещали (эпизодов)</string>
+    <string name="metric_leans">Наклоны: показано / отклонено</string>
+    <string name="metric_leans_value">%1$d / %2$d</string>
     <string name="metric_reactions">Воспроизведено реакций</string>
     <string name="gps_active">Активен</string>
     <string name="gps_silent">Нет данных %1$d с</string>

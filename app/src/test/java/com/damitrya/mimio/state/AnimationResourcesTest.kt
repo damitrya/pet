@@ -1,6 +1,7 @@
 package com.damitrya.mimio.state
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -104,6 +105,20 @@ class AnimationResourcesTest {
         }
         val cloud = readWebp(File(rawDir, "fox_cloud_farewell.webp")).durationMs
         assertTrue("the cloud ends before the shutdown's safety timeout: $cloud", cloud < StateMachine.SHUTDOWN_TIMEOUT_MS)
+    }
+
+    @Test
+    fun leansPlayTheWave5FilesAsShortOneShots() {
+        // Wave 7 adds no files: the INERTIA_* states play the leans made in wave 5.
+        for (state in CompanionState.INERTIA) {
+            assertFalse(state.isLooping)
+            val name = pools.getValue(state).variants.single().resName
+            assertEquals(state.rawVideoResName, name)
+            assertTrue(name, name in WAVE5)
+            val ms = readWebp(File(rawDir, "fox_$name.webp")).durationMs
+            assertTrue("$name: a short reaction ($ms ms)", ms <= 2_500L)
+            assertTrue("ordinary leans never overlap", ms < com.damitrya.mimio.data.CarMotionConfig.DEFAULT.softCooldownMs)
+        }
     }
 
     @Test
