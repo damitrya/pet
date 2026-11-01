@@ -83,6 +83,17 @@ enum class CompanionState(
     TURN_RIGHT("", false, "turn_right"),
 
     /**
+     * Wave 7, short leans with the car (Auto profile, see [com.damitrya.mimio.data.CarMotionTracker]). Named after
+     * the way the fox leans, like their files: a turn to the right throws it to the left (INERTIA_LEFT), a turn to the
+     * left to the right (INERTIA_RIGHT), braking forward, speeding up backward. Below sharp turns, above music and
+     * idle behaviour; they return to the ambient state (CALM, MUSIC, PHONE_CALL) they interrupted.
+     */
+    INERTIA_LEFT("", false, "inertia_left"),
+    INERTIA_RIGHT("", false, "inertia_right"),
+    INERTIA_FORWARD("", false, "inertia_forward"),
+    INERTIA_BACK("", false, "inertia_back"),
+
+    /**
      * Looping "on the phone" while a call is active. Acts as the ambient state during the call:
      * one-shots return here, and the call ending returns to MUSIC or CALM.
      */
@@ -117,6 +128,11 @@ enum class CompanionState(
      * (see [StateMachine.startFarewell]). Never started by the system.
      */
     FAREWELL("", false, "heart_transform");
+
+    companion object {
+        /** The wave 7 leans with the car. */
+        val INERTIA: Set<CompanionState> = setOf(INERTIA_LEFT, INERTIA_RIGHT, INERTIA_FORWARD, INERTIA_BACK)
+    }
 }
 
 /**

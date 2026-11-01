@@ -187,7 +187,7 @@ class TurnCandidateTracker {
     }
 }
 
-/** Hard-acceleration episodes from SensorDataProvider's longitudinal value (phone Y axis, low-pass filtered). */
+/** Intensive-start episodes from the smoothed acceleration along the car's learned axis (CarMotionTracker). */
 class AccelCandidateTracker {
 
     data class Outcome(val accepted: Boolean, val reason: DiagnosticReason?, val acceleration: Float, val threshold: Float)
@@ -197,9 +197,8 @@ class AccelCandidateTracker {
     private var belowSince = 0L
     private var peak = 0f
 
-    /** [phoneY] < -[threshold] is SensorDataProvider's rapid acceleration ([rapid]). */
-    fun onSample(phoneY: Float, threshold: Float, rapid: Boolean, now: Long): Outcome? {
-        val accel = -phoneY
+    /** [accel] (positive = speeding up) above [threshold] for long enough is an intensive start ([rapid]). */
+    fun onSample(accel: Float, threshold: Float, rapid: Boolean, now: Long): Outcome? {
         val intensity = if (threshold > 0f) accel / threshold else 0f
         if (!active) {
             if (intensity < START_FRACTION && !rapid) return null

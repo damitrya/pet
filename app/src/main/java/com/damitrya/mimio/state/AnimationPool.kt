@@ -135,10 +135,13 @@ object AnimationPools {
 
     /**
      * Animations with no automatic trigger yet: they exist for the gallery and the manual preview (settings →
-     * debug tools) only. A reliable bump detector is still missing (pothole), and the inertia leans are not
-     * wired to GPS / accelerometer / gyroscope yet. Kept out of every pool on purpose.
+     * debug tools) only. A reliable bump detector is still missing (pothole). Kept out of every pool on purpose.
+     * (The inertia leans of wave 5 play since wave 7: INERTIA_* states.)
      */
-    val PREVIEW_ONLY = setOf("pothole", "inertia_left", "inertia_right", "inertia_forward", "inertia_back")
+    val PREVIEW_ONLY = setOf("pothole")
+
+    /** Wave 7: the fox leans with the car (turns, braking, speeding up); see the INERTIA_* states. */
+    val INERTIA_LEANS = listOf("inertia_left", "inertia_right", "inertia_forward", "inertia_back")
 
     /** Music shows of wave 5: an accordion (bayan), a balalaika and a punk dance with a mohawk. */
     val MUSIC_SHOWS_WAVE5 = listOf("bayan", "balalaika", "punk")
@@ -287,6 +290,12 @@ object AnimationPools {
             CompanionState.DROWSY to single("drowsy", fallback = "blink"),
             CompanionState.TURN_LEFT to single("turn_left", fallback = "alert"),
             CompanionState.TURN_RIGHT to single("turn_right", fallback = "alert"),
+            // Wave 7: leans with the car, named after the way the fox leans (a right turn throws it to the left).
+            // The slime has no leans: it blinks.
+            CompanionState.INERTIA_LEFT to single("inertia_left", fallback = "blink"),
+            CompanionState.INERTIA_RIGHT to single("inertia_right", fallback = "blink"),
+            CompanionState.INERTIA_FORWARD to single("inertia_forward", fallback = "blink"),
+            CompanionState.INERTIA_BACK to single("inertia_back", fallback = "blink"),
             CompanionState.PHONE_CALL to single("phone_call", fallback = "idle_small"),
             CompanionState.LOW_BATTERY to single("low_battery", fallback = "blink"),
             // Wave 5: battery at 10 % and the 1 % goodbye (the slime blinks, then the service stops).

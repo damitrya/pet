@@ -1,8 +1,12 @@
 package com.damitrya.mimio.diagnostics
 
 import com.damitrya.mimio.data.BrakeDetector
+import com.damitrya.mimio.data.CalibrationReason
+import com.damitrya.mimio.data.CalibrationState
+import com.damitrya.mimio.data.CarMotionTracker
 import com.damitrya.mimio.data.DrivingData
 import com.damitrya.mimio.data.GpsFixGate
+import com.damitrya.mimio.data.InertiaOutcome
 import com.damitrya.mimio.data.TurnDirection
 import com.damitrya.mimio.state.CompanionState
 import com.damitrya.mimio.state.TripEvent
@@ -60,6 +64,18 @@ class DrivingDiagnosticsRecorder(
     private var winLateral = 0f
     private var winYaw = 0f
     private var winSpeed = 0f
+    private var winMotionSamples = 0
+    private var winRawLongMin = Float.NaN
+    private var winRawLongMax = Float.NaN
+    private var winLongMin = Float.NaN
+    private var winLongMax = Float.NaN
+    private var winLatAccel = Float.NaN
+    private var winHorizontal = 0f
+    private var winPhoneMoving = false
+
+    /** The lean on screen and when it began (for INERTIA_END). */
+    private var inertiaState: CompanionState? = null
+    private var inertiaStartedAt = 0L
 
     /**
      * Starts recording. A [previous] summary of an interrupted recording (the service stopped meanwhile) is
@@ -294,10 +310,14 @@ class DrivingDiagnosticsRecorder(
         maybeFlushWindow(now)
     }
 
-    /** One accelerometer sample of SensorDataProvider: phone-Y value and its rapid-acceleration flag. */
-    fun onLongitudinalSample(phoneY: Float, threshold: Float, rapid: Boolean) {
+    /**
+     * One longitudinal sample of [CarMotionTracker]: the smoothed acceleration along the car's learned axis (positive =
+     * speeding up), the intensive-start threshold and whether an intensive start is in progress. Only sent while the
+     * axis is known; the phone's own axes are no longer used.
+     */
+    fun onLongitudinalSample(acceleration: Float, threshold: Float, rapid: Boolean) {
         if (!isRunning) return
-        accelTracker.onSample(phoneY, threshold, rapid, clock())?.let { o ->
+        accelTracker.onSample(acceleration, threshold, rapid, clock())?.let { o ->
             summary.accelCandidates++
             if (o.accepted) summary.accelDetected++ else summary.accelReasons.inc(o.reason!!.name)
             emit(
@@ -306,26 +326,115 @@ class DrivingDiagnosticsRecorder(
                     listOf(
                         "acceleration" to "${o.acceleration.f1()} m/s2",
                         "threshold" to "${o.threshold.f1()} m/s2",
-                        "axis" to "phone Y"
+                        "axis" to "vehicle"
                     ),
                     o.accepted, o.reason
                 )
             )
-            // DrivingData.isRapidAcceleration is computed, but nothing in the state machine reacts to it.
-            if (o.accepted) {
-                onAnimationRequest(
-                    "HARD_ACCELERATION", RequestResult.REJECTED, DiagnosticReason.ANIMATION_NOT_CONFIGURED,
-                    "no reaction to DrivingData.isRapidAcceleration"
-                )
-            }
         }
     }
 
-    fun onMovement(started: Boolean, speedKmh: Float, parked: Boolean) {
+    /** One linear-acceleration sample of [CarMotionTracker] (aggregated into the SENSOR_STATS window). */
+    fun onMotionSample(t: CarMotionTracker, horizontal: Float) = onMotionSample(
+        t.lastRawLongitudinal, t.lastLongitudinal, t.lastLateralAccel, horizontal,
+        t.frame.state, t.frame.quality, t.phone.isMoving
+    )
+
+    fun onMotionSample(
+        rawLong: Float, long: Float, latAccel: Float, horizontal: Float,
+        state: CalibrationState, quality: Float, phoneMoving: Boolean
+    ) {
+        if (!isRunning) return
+        val now = clock()
+        winMotionSamples++
+        winHorizontal = maxOf(winHorizontal, horizontal)
+        if (phoneMoving) winPhoneMoving = true
+        if (!rawLong.isNaN()) {
+            winRawLongMin = if (winRawLongMin.isNaN()) rawLong else minOf(winRawLongMin, rawLong)
+            winRawLongMax = if (winRawLongMax.isNaN()) rawLong else maxOf(winRawLongMax, rawLong)
+        }
+        if (!long.isNaN()) {
+            winLongMin = if (winLongMin.isNaN()) long else minOf(winLongMin, long)
+            winLongMax = if (winLongMax.isNaN()) long else maxOf(winLongMax, long)
+            if (state == CalibrationState.READY && !phoneMoving) {
+                if (long > summary.peakLongAccel) summary.peakLongAccel = long
+                if (long < summary.peakLongDecel) summary.peakLongDecel = long
+            }
+        }
+        if (!latAccel.isNaN()) {
+            winLatAccel = if (winLatAccel.isNaN()) kotlin.math.abs(latAccel) else maxOf(winLatAccel, kotlin.math.abs(latAccel))
+            if (state == CalibrationState.READY && !phoneMoving && kotlin.math.abs(latAccel) > summary.peakLateralAccel) {
+                summary.peakLateralAccel = kotlin.math.abs(latAccel)
+            }
+        }
+        summary.vehicleQuality = quality
+        if (summary.vehicleCalibration.isEmpty()) summary.vehicleCalibration = state.name
+        maybeFlushWindow(now)
+    }
+
+    /** The car's forward axis changed state (see [com.damitrya.mimio.data.VehicleFrameEstimator]). */
+    fun onCalibrationChange(from: CalibrationState, to: CalibrationState, reason: CalibrationReason, quality: Float, lessons: Int) {
+        if (!isRunning) return
+        summary.vehicleCalibration = to.name
+        summary.vehicleCalibrationReason = reason.name
+        summary.vehicleQuality = quality
+        summary.calibrationTransitions.inc("${from.name} -> ${to.name} ${reason.name}")
+        emit(
+            DrivingDiagnosticsEvent(
+                DrivingDiagnosticsEvent.Type.CALIBRATION, wallClock(),
+                listOf(
+                    "vehicleAxis" to to.name,
+                    "from" to from.name,
+                    "transitionReason" to reason.name,
+                    "quality" to quality.f2(),
+                    "lessons" to "$lessons"
+                )
+            )
+        )
+    }
+
+    /** The phone probably started / stopped being moved relative to the car. */
+    fun onPhoneMotion(moving: Boolean, cause: String) {
+        if (!isRunning) return
+        if (moving) summary.phoneMovingEpisodes++
+        val fields = mutableListOf("phoneMoving" to "$moving")
+        if (moving) fields += "cause" to cause
+        emit(
+            DrivingDiagnosticsEvent(
+                DrivingDiagnosticsEvent.Type.PHONE_MOTION, wallClock(), fields,
+                reason = if (moving) DiagnosticReason.PHONE_MOVING else null
+            )
+        )
+    }
+
+    /** A manoeuvre reached a level: accepted (handed to the state machine) or the reason it was not. */
+    fun onInertiaCandidate(o: InertiaOutcome) {
+        if (!isRunning) return
+        val key = "${o.kind.name} ${o.level.name}"
+        summary.inertiaCandidates.inc(key)
+        if (o.accepted) summary.inertiaAccepted.inc(key) else summary.inertiaReasons.inc("${o.kind.name} ${o.reason!!.name}")
+        emit(
+            DrivingDiagnosticsEvent(
+                DrivingDiagnosticsEvent.Type.INERTIA_CANDIDATE, wallClock(),
+                listOf(
+                    "kind" to o.kind.name,
+                    "level" to o.level.name,
+                    "peak" to "${o.peak.f1()} m/s2",
+                    "duration" to "${o.durationMs} ms",
+                    "speed" to "${o.speedKmh.f1()} km/h"
+                ),
+                o.accepted, o.reason
+            )
+        )
+    }
+
+    /** The state machine's moving / stopped changed; [stopKind] says what kind of stop a start leaves. */
+    fun onMovement(started: Boolean, speedKmh: Float, parked: Boolean, stopKind: String = "") {
         if (!isRunning) return
         if (started) summary.movementStarts++ else summary.movementStops++
         val fields = mutableListOf("speed" to "${speedKmh.f1()} km/h")
         if (started) fields += "parkedBefore" to "$parked"
+        if (started && stopKind.isNotEmpty()) fields += "stop" to stopKind
         emit(
             DrivingDiagnosticsEvent(
                 if (started) DrivingDiagnosticsEvent.Type.MOVEMENT_START else DrivingDiagnosticsEvent.Type.MOVEMENT_STOP,
@@ -364,6 +473,19 @@ class DrivingDiagnosticsRecorder(
     /** The state machine changed the character's state; [shown] = the overlay with the character is on screen. */
     fun onStateChanged(newState: CompanionState, previous: CompanionState, shown: Boolean) {
         if (!isRunning) return
+        if (previous in CompanionState.INERTIA && previous == inertiaState) {
+            inertiaState = null
+            emit(
+                DrivingDiagnosticsEvent(
+                    DrivingDiagnosticsEvent.Type.INERTIA_END, wallClock(),
+                    listOf("state" to previous.name, "to" to newState.name, "after" to "${clock() - inertiaStartedAt} ms")
+                )
+            )
+        }
+        if (newState in CompanionState.INERTIA) {
+            inertiaState = newState
+            inertiaStartedAt = clock()
+        }
         summary.stateChanges.inc(newState.name)
         if (newState in REACTIONS) if (shown) summary.reactionsPlayed++ else summary.reactionsHidden++
         if (newState !in LOGGED_STATES) return
@@ -381,6 +503,18 @@ class DrivingDiagnosticsRecorder(
         // Looping states rotate variants on their own: only one-shots are written.
         if (!isRunning || state.isLooping || state !in LOGGED_STATES) return
         if (resName == null) summary.playbackMissing++
+        if (state in CompanionState.INERTIA) {
+            if (resName != null) summary.inertiaPlayed.inc(resName)
+            emit(
+                DrivingDiagnosticsEvent(
+                    DrivingDiagnosticsEvent.Type.INERTIA_START, wallClock(),
+                    listOf("state" to state.name, "file" to (resName ?: "none")),
+                    accepted = resName != null,
+                    reason = if (resName == null) DiagnosticReason.ANIMATION_NOT_CONFIGURED else null
+                )
+            )
+            return
+        }
         emit(
             DrivingDiagnosticsEvent(
                 DrivingDiagnosticsEvent.Type.PLAYBACK, wallClock(),
@@ -432,7 +566,7 @@ class DrivingDiagnosticsRecorder(
 
     private fun flushWindow() {
         val now = clock()
-        if (winAccelSamples > 0 || winGyroSamples > 0) {
+        if (winAccelSamples > 0 || winGyroSamples > 0 || winMotionSamples > 0) {
             val fields = mutableListOf("window" to "${(now - windowStart) / 1000} s")
             if (winAccelSamples > 0) {
                 val check = winCheck ?: BrakeDetector.Check.LEGACY
@@ -449,6 +583,19 @@ class DrivingDiagnosticsRecorder(
                 fields += "gyroscope" to "no samples"
             }
             fields += "calibration" to summary.calibration.ifEmpty { "?" }
+            if (winMotionSamples > 0) {
+                fields += "vehicleAxis" to summary.vehicleCalibration.ifEmpty { "?" }
+                fields += "axisQuality" to if (summary.vehicleQuality.isNaN()) "n/a" else summary.vehicleQuality.f2()
+                if (winLongMin.isNaN()) {
+                    fields += "longitudinal" to "n/a (no axis)"
+                    fields += "horizontalMax" to "${winHorizontal.f1()} m/s2"
+                } else {
+                    fields += "rawLongitudinal" to "${winRawLongMin.f1()}..${winRawLongMax.f1()} m/s2"
+                    fields += "smoothedLongitudinal" to "${winLongMin.f1()}..${winLongMax.f1()} m/s2"
+                    fields += "lateralAccelMax" to "${winLatAccel.f1()} m/s2"
+                }
+                fields += "phoneMoving" to "$winPhoneMoving"
+            }
             emit(DrivingDiagnosticsEvent(DrivingDiagnosticsEvent.Type.SENSOR_STATS, wallClock(), fields), significant = false)
         }
         windowStart = now
@@ -458,6 +605,14 @@ class DrivingDiagnosticsRecorder(
         winBrakeValue = Float.NaN
         winLateral = 0f
         winYaw = 0f
+        winMotionSamples = 0
+        winRawLongMin = Float.NaN
+        winRawLongMax = Float.NaN
+        winLongMin = Float.NaN
+        winLongMax = Float.NaN
+        winLatAccel = Float.NaN
+        winHorizontal = 0f
+        winPhoneMoving = false
     }
 
     /** Writes [event] (on [io]); [significant] events become the screen's "last event". */
@@ -520,7 +675,7 @@ class DrivingDiagnosticsRecorder(
         val REACTIONS = setOf(
             CompanionState.ALERT, CompanionState.TURN_LEFT, CompanionState.TURN_RIGHT,
             CompanionState.TRIP_START, CompanionState.ARRIVAL
-        )
+        ) + CompanionState.INERTIA
 
         /** State changes written to the journal; all others are only counted (blinks would flood it). */
         val LOGGED_STATES = REACTIONS + setOf(

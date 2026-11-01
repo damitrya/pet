@@ -2,6 +2,8 @@
 
 Встроенный регистратор, который показывает, почему лисёнок не реагирует на повороты, разгон и торможение.
 Поведение персонажа он не меняет: пороги, приоритеты анимаций и логика поездки остаются прежними.
+С волны 7 он также записывает физику автомобиля (калибровку, телефон в руках, манёвры и наклоны) — см.
+[car-physics.md](car-physics.md).
 
 ## Как пользоваться
 
@@ -18,6 +20,7 @@
 SensorDataProvider ──┬─ DrivingData ─► CompanionService ─► GpsFixGate.onVerdict ─┐
   (GPS, гироскоп,     │                    │                                     │
    акселерометр)      │                    └► StateMachine (решения, причины) ───┤
+  CarMotionTracker ───┼─ калибровка, телефон, манёвры, окна (wave 7) ────────────┤
 AccelerometerMonitor ─┴─ BrakeDetector (lastCheck / lastValue / calibration) ────┤
 CharacterView (выбранный файл анимации) ─────────────────────────────────────────┤
                                                                                  ▼
@@ -46,14 +49,20 @@ CharacterView (выбранный файл анимации) ──────�
 | `GPS_STALE` | `GpsFixGate`: возраст > 10 с; `StateMachine`: последняя пригодная скорость старше 10 с |
 | `LOCATION_INACCURATE` | `GpsFixGate`: погрешность > `MAX_ACCURACY_M` (50 м) |
 | `SPEED_UNAVAILABLE` | `Location.hasSpeed()=false`. Код это не проверяет и принимает скорость 0, поэтому только `warning` |
-| `SPEED_BELOW_THRESHOLD` | торможение: < 8 км/ч (`BrakeDetector.MIN_SPEED_KMH`); реакция на поворот: < 20 км/ч |
+| `SPEED_BELOW_THRESHOLD` | торможение: < 8 км/ч (`BrakeDetector.MIN_SPEED_KMH`); поворот и наклоны: < 8 км/ч (было 20 км/ч) |
 | `SENSOR_UNAVAILABLE` | датчика нет или `registerListener` вернул false |
 | `CALIBRATION_PENDING` | ось не выучена: рывок ждёт подтверждения замедления по GPS |
 | `ACCELERATION_BELOW_THRESHOLD` | значение не дошло до порога детектора |
 | `DURATION_BELOW_THRESHOLD` | боковое ускорение выше порога, но меньше 300 мс |
 | `COOLDOWN_ACTIVE` | ALERT 3 с, поворот 4 с |
 | `STATE_BLOCKED` | состояние персонажа не позволяет реакцию (ALERT уже идёт, PET, не из `TURN_INTERRUPTIBLE`) |
-| `ANIMATION_NOT_CONFIGURED` | на `DrivingData.isRapidAcceleration` нет реакции; нет файла анимации |
+| `ANIMATION_NOT_CONFIGURED` | нет файла анимации (с волны 7 на разгон есть реакция — INERTIA_BACK) |
 | `OVERLAY_HIDDEN` | состояние сменилось, но персонаж скрыт |
+| `PHONE_MOVING` | wave 7: телефон, вероятно, перемещают относительно машины (наклон, скачок ориентации, неправдоподобная скорость вращения) |
+| `CALIBRATION_UNRELIABLE` | wave 7: направление движения машины не READY — продольный наклон не играет |
+| `INERTIA_COOLDOWN` | wave 7: наклон того же уровня был меньше 4 с назад (обычный — и после резкого поворота) |
+| `EVENT_TOO_SHORT` | wave 7: манёвр выше порога меньше 300 мс |
+| `SENSOR_DATA_INCONSISTENT` | wave 7: акселерометр и изменение GPS-скорости не сходятся; поворот без центростремительного ускорения |
+| `REACTIONS_DISABLED` | wave 7: «Наклоны при поворотах, разгоне и торможении» выключены (ALERT играет всегда) |
 
 `DURATION_BELOW_THRESHOLD` и `OVERLAY_HIDDEN` добавлены к списку из задачи: без них пришлось бы подставлять неточные причины.

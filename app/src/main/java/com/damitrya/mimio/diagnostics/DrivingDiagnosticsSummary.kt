@@ -78,6 +78,24 @@ class DrivingDiagnosticsSummary {
     var peakLateral = 0f         // m/s²
     var peakYawRate = 0f         // rad/s, absolute
 
+    // Car physics (wave 7)
+    /** State of the car's forward axis ([com.damitrya.mimio.data.CalibrationState]) and its last reason. */
+    var vehicleCalibration = ""
+    var vehicleCalibrationReason = ""
+    var vehicleQuality = Float.NaN
+    /** "READY -> SUSPENDED PHONE_MOVING" → count. */
+    val calibrationTransitions = linkedMapOf<String, Long>()
+    var phoneMovingEpisodes = 0L
+    /** Manoeuvres by "BRAKE SOFT": seen (accepted or not), accepted, and "BRAKE PHONE_MOVING" rejections. */
+    val inertiaCandidates = linkedMapOf<String, Long>()
+    val inertiaAccepted = linkedMapOf<String, Long>()
+    val inertiaReasons = linkedMapOf<String, Long>()
+    /** Leans that started on screen, by file ("inertia_right") → count. */
+    val inertiaPlayed = linkedMapOf<String, Long>()
+    var peakLongAccel = 0f       // smoothed, along the car's axis, m/s²
+    var peakLongDecel = 0f       // most negative smoothed value, m/s²
+    var peakLateralAccel = 0f    // accelerometer, across the car's axis, absolute
+
     // Animations
     /** "ALERT STARTED" / "TURN_LEFT REJECTED COOLDOWN_ACTIVE" → count. */
     val requests = linkedMapOf<String, Long>()
@@ -142,6 +160,18 @@ class DrivingDiagnosticsSummary {
         put("peakBrakeAxis", peakBrakeAxis)
         put("peakLateral", peakLateral)
         put("peakYawRate", peakYawRate)
+        put("vehicleCalibration", vehicleCalibration)
+        put("vehicleCalibrationReason", vehicleCalibrationReason)
+        put("vehicleQuality", vehicleQuality)
+        putMap("calibrationTransition", calibrationTransitions)
+        put("phoneMovingEpisodes", phoneMovingEpisodes)
+        putMap("inertiaCandidate", inertiaCandidates)
+        putMap("inertiaAccepted", inertiaAccepted)
+        putMap("inertiaReason", inertiaReasons)
+        putMap("inertiaPlayed", inertiaPlayed)
+        put("peakLongAccel", peakLongAccel)
+        put("peakLongDecel", peakLongDecel)
+        put("peakLateralAccel", peakLateralAccel)
         putMap("request", requests)
         put("reactionsPlayed", reactionsPlayed)
         put("reactionsHidden", reactionsHidden)
@@ -213,6 +243,18 @@ class DrivingDiagnosticsSummary {
             s.peakBrakeAxis = float("peakBrakeAxis")
             s.peakLateral = float("peakLateral")
             s.peakYawRate = float("peakYawRate")
+            s.vehicleCalibration = str("vehicleCalibration")
+            s.vehicleCalibrationReason = str("vehicleCalibrationReason")
+            s.vehicleQuality = float("vehicleQuality", Float.NaN)
+            map("calibrationTransition", s.calibrationTransitions) { it.toLongOrNull() }
+            s.phoneMovingEpisodes = long("phoneMovingEpisodes")
+            map("inertiaCandidate", s.inertiaCandidates) { it.toLongOrNull() }
+            map("inertiaAccepted", s.inertiaAccepted) { it.toLongOrNull() }
+            map("inertiaReason", s.inertiaReasons) { it.toLongOrNull() }
+            map("inertiaPlayed", s.inertiaPlayed) { it.toLongOrNull() }
+            s.peakLongAccel = float("peakLongAccel")
+            s.peakLongDecel = float("peakLongDecel")
+            s.peakLateralAccel = float("peakLateralAccel")
             map("request", s.requests) { it.toLongOrNull() }
             s.reactionsPlayed = long("reactionsPlayed")
             s.reactionsHidden = long("reactionsHidden")

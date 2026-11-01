@@ -307,7 +307,7 @@ class SettingsActivity : AppCompatActivity() {
     /** Every fox animation the app knows (pools, sequences, preview-only), the newest first. */
     private fun previewNames(): List<String> {
         val pooled = AnimationPools.create().values.flatMap { p -> p.variants.flatMap { listOf(it.resName) + it.next.values } }
-        val first = AnimationPools.PREVIEW_ONLY + AnimationPools.MUSIC_SHOWS_WAVE5 +
+        val first = AnimationPools.INERTIA_LEANS + AnimationPools.PREVIEW_ONLY + AnimationPools.MUSIC_SHOWS_WAVE5 +
             listOf("battery_sad", "cloud_farewell", AnimationPools.HEART_TRANSFORM)
         return (first + pooled.sorted()).distinct()
             .filter { resources.getIdentifier("fox_$it", "raw", packageName) != 0 }

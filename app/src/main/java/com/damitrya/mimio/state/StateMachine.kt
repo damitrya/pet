@@ -5,8 +5,12 @@ import android.os.Looper
 import com.damitrya.mimio.data.AppProfile
 import com.damitrya.mimio.data.AppUsageData
 import com.damitrya.mimio.data.BatteryData
+import com.damitrya.mimio.data.CarMotionConfig
+import com.damitrya.mimio.data.CarMotionEvent
 import com.damitrya.mimio.data.DrivingData
 import com.damitrya.mimio.data.GpsFixGate
+import com.damitrya.mimio.data.InertiaKind
+import com.damitrya.mimio.data.InertiaLevel
 import com.damitrya.mimio.data.MediaData
 import com.damitrya.mimio.data.PhoneCallData
 import com.damitrya.mimio.data.ScreenData
@@ -29,7 +33,7 @@ import kotlin.random.Random
  *
  * Priorities: ALERT > PET > interaction one-shots (TAP, BOUNCE, ANNOYED, HEARTS, SHY, WAKE) and
  * RELIEF / TRIP_START / ARRIVAL > sharp turns (TURN_LEFT/RIGHT, see [TURN_INTERRUPTIBLE]) >
- * GREETING, TRIP_PREPARE, STRETCH >
+ * GREETING, TRIP_PREPARE, STRETCH > intensive leans > ordinary leans (INERTIA_*, wave 7, [onCarMotion]) >
  * ambient: PHONE_CALL > MUSIC > CALM / SLEEP. Idle one-shots (BLINK, FIDGET, DROWSY, LOW_BATTERY)
  * only start from an ambient state; BLINK and dozing off also wait for an idle scene ([idleBusy]).
  * Which file each state plays is up to [AnimationDirector]; it never changes the state.
@@ -120,6 +124,19 @@ class StateMachine(
     /** Last sharp-turn reaction and the previous turning flag (reaction fires on the rising edge). */
     private var turnAt: Long = 0L
     private var wasTurning: Boolean = false
+
+    /** Last lean (any level) and last intensive lean: each level keeps [CarMotionConfig.softCooldownMs] apart. */
+    private var inertiaAt: Long = 0L
+    private var strongInertiaAt: Long = 0L
+
+    /** Thresholds of the car physics (only the lean pause is read here). */
+    var carMotion: CarMotionConfig = CarMotionConfig.DEFAULT
+
+    /** Moving / stopped with hysteresis (see [MovementStabilizer]). */
+    private val movement = MovementStabilizer()
+
+    /** When the car last came to a confirmed stop (diagnostics: traffic light or parking). */
+    private var movementStoppedAt: Long = 0L
 
     /** Which battery reaction is due ([updateBatteryData]). */
     private val battery = BatteryWatcher(clock)
@@ -264,6 +281,10 @@ class StateMachine(
         departedAt = 0L
         wasTurning = false
         wasMoving = false
+        movement.reset()
+        movementStoppedAt = 0L
+        inertiaAt = 0L
+        strongInertiaAt = 0L
         restartReactions()
     }
 
@@ -489,8 +510,8 @@ class StateMachine(
         when (currentState) {
             CompanionState.SLEEP, CompanionState.FALL_ASLEEP -> transitionTo(CompanionState.WAKE)
             CompanionState.TAP, CompanionState.BOUNCE, CompanionState.ANNOYED, CompanionState.WAKE -> {}
-            else -> if (currentState.isLooping) {
-                // Immediate: remember where to return and play TAP
+            else -> if (currentState.isLooping || currentState in CompanionState.INERTIA) {
+                // Immediate (a lean is below the user): remember where to return and play TAP
                 rememberBaseState()
                 transitionTo(CompanionState.TAP)
             } else {
@@ -591,8 +612,12 @@ class StateMachine(
         wasTurning = data.isTurning
         if (!usable) return
 
+        movement.onFix(data.speedKmh)
         val moving = isConfirmedMoving()
-        if (moving != wasMoving) DrivingDiagnostics.sink?.onMovement(moving, data.speedKmh, parked)
+        if (moving != wasMoving) {
+            DrivingDiagnostics.sink?.onMovement(moving, data.speedKmh, parked, if (moving) stopKind(now) else "")
+            if (!moving) movementStoppedAt = now
+        }
         if (moving && !wasMoving) onStartedMoving()
         wasMoving = moving
 
@@ -625,13 +650,17 @@ class StateMachine(
     }
 
     /**
-     * Sharp turn: the character is thrown to the outside of the turn. Needs real driving speed
-     * ([TURN_MIN_KMH]) so that turning the phone in the hand does not count. Only interrupts the
-     * states in [TURN_INTERRUPTIBLE]; a skipped turn does not start the cooldown.
+     * Sharp turn: the character is thrown to the outside of the turn. Needs driving speed ([TURN_MIN_KMH]); turning
+     * the phone in the hand is told apart by the car physics (an implausible yaw rate, tilting), which never reports
+     * it as a turn. Only interrupts the states in [TURN_INTERRUPTIBLE]; a skipped turn does not start the cooldown.
      */
     private fun onSharpTurn(direction: TurnDirection) {
         if (direction == TurnDirection.NONE) return
         val turn = if (direction == TurnDirection.LEFT) CompanionState.TURN_LEFT else CompanionState.TURN_RIGHT
+        if (!settings.sensorReactionEnabled) {
+            diagRequest(turn, RequestResult.REJECTED, DiagnosticReason.REACTIONS_DISABLED)
+            return
+        }
         if (currentState !in TURN_INTERRUPTIBLE) {
             diagRequest(turn, RequestResult.REJECTED, DiagnosticReason.STATE_BLOCKED, "state $currentState")
             return
@@ -660,6 +689,58 @@ class StateMachine(
         transitionTo(
             if (direction == TurnDirection.LEFT) CompanionState.TURN_LEFT else CompanionState.TURN_RIGHT
         )
+    }
+
+    /**
+     * A manoeuvre of the car physics (wave 7): the fox leans with it for a moment and goes back to what it was doing
+     * (CALM, MUSIC, PHONE_CALL — the music keeps playing).
+     *
+     * - turn left → INERTIA_RIGHT, turn right → INERTIA_LEFT, braking → INERTIA_FORWARD, speeding up → INERTIA_BACK;
+     *   sharp turns come as [DrivingData.isTurning] and play TURN_LEFT/RIGHT instead;
+     * - an ordinary (SOFT) lean only starts from ambient and idle states ([SOFT_LEAN_INTERRUPTIBLE]) and never cuts a
+     *   scene; an intensive (STRONG) one may also replace a running lean of another kind;
+     * - never over ALERT, petting, other reactions to the user, trip events or a sharp turn; the same lean is never
+     *   restarted while it plays (a long manoeuvre is one reaction);
+     * - leans of one level are at least [CarMotionConfig.softCooldownMs] apart (an ordinary one also after a sharp
+     *   turn); the switch "React to braking and turns" turns them off.
+     */
+    fun onCarMotion(event: CarMotionEvent) {
+        val target = when (event.kind) {
+            InertiaKind.TURN_LEFT -> CompanionState.INERTIA_RIGHT
+            InertiaKind.TURN_RIGHT -> CompanionState.INERTIA_LEFT
+            InertiaKind.BRAKE -> CompanionState.INERTIA_FORWARD
+            InertiaKind.ACCELERATE -> CompanionState.INERTIA_BACK
+        }
+        val detail = "${event.kind} ${event.level}"
+        fun reject(reason: DiagnosticReason, why: String) =
+            diagRequest(target, RequestResult.REJECTED, reason, "$detail: $why")
+
+        if (profile != AppProfile.AUTO) return
+        if (!settings.sensorReactionEnabled) return reject(DiagnosticReason.REACTIONS_DISABLED, "switched off in the settings")
+        if (alertActive) return reject(DiagnosticReason.STATE_BLOCKED, "ALERT playing")
+        if (currentState == target) return reject(DiagnosticReason.STATE_BLOCKED, "the same lean is playing")
+        val strong = event.level == InertiaLevel.STRONG
+        val allowed = if (strong) currentState in STRONG_LEAN_INTERRUPTIBLE else currentState in SOFT_LEAN_INTERRUPTIBLE
+        if (!allowed) return reject(DiagnosticReason.STATE_BLOCKED, "state $currentState")
+        if (!strong && distractingScene()) return reject(DiagnosticReason.STATE_BLOCKED, "a scene is playing")
+        val now = clock()
+        val last = if (strong) strongInertiaAt else maxOf(inertiaAt, turnAt)
+        if (last != 0L && now - last < carMotion.softCooldownMs) {
+            return reject(DiagnosticReason.INERTIA_COOLDOWN, "${(carMotion.softCooldownMs - (now - last)) / 100 / 10f} s left")
+        }
+        diagRequest(target, RequestResult.STARTED, null, detail)
+        inertiaAt = now
+        if (strong) strongInertiaAt = now
+        rememberBaseState()
+        transitionTo(target)
+    }
+
+    /** What kind of stop the car is leaving (diagnostics): a traffic light, a longer stop or a parked car. */
+    private fun stopKind(now: Long): String = when {
+        movementStoppedAt == 0L -> if (parked) "PARKED" else "UNKNOWN"
+        parked -> "PARKED"
+        now - movementStoppedAt < SHORT_STOP_MS -> "TRAFFIC_LIGHT"
+        else -> "LONG_STOP"
     }
 
     /**
@@ -735,11 +816,11 @@ class StateMachine(
     }
 
     /**
-     * True if fresh GPS data shows the car is moving (even slowly). Stale speed —
+     * True if fresh GPS data shows the car is moving (even slowly, with the hysteresis of [MovementStabilizer]). Stale speed —
      * no updates for [GPS_STALE_MS], e.g. GPS lost in a tunnel — does not count as moving.
      */
     private fun isConfirmedMoving(): Boolean =
-        lastSpeedKmh >= STOPPED_KMH && clock() - lastSpeedAt <= GPS_STALE_MS
+        movement.isMoving && clock() - lastSpeedAt <= GPS_STALE_MS
 
     /** Standing for less than [SHORT_STOP_MS] (traffic light, jam): the car will move off again soon. */
     private fun isShortStop(): Boolean =
@@ -1100,16 +1181,31 @@ class StateMachine(
             CompanionState.BLINK, CompanionState.FIDGET, CompanionState.DROWSY, CompanionState.LOW_BATTERY,
             CompanionState.BATTERY_CRITICAL, CompanionState.STRETCH, CompanionState.GREETING,
             CompanionState.FALL_ASLEEP, CompanionState.TRIP_PREPARE, CompanionState.PREVIEW
+        ) + CompanionState.INERTIA
+
+        /** States an ordinary lean may interrupt: ambient states and idle one-shots nobody asked for. */
+        private val SOFT_LEAN_INTERRUPTIBLE = setOf(
+            CompanionState.CALM, CompanionState.MUSIC, CompanionState.PHONE_CALL,
+            CompanionState.BLINK, CompanionState.FIDGET, CompanionState.DROWSY
         )
 
-        /** Minimum speed and pause between sharp-turn reactions. */
-        private const val TURN_MIN_KMH = 20f
+        /** ...and an intensive one: also a lean of another kind already playing. */
+        private val STRONG_LEAN_INTERRUPTIBLE = SOFT_LEAN_INTERRUPTIBLE + CompanionState.INERTIA
+
+        /**
+         * Minimum speed and pause between sharp-turn reactions. Wave 7: 8 km/h like the leans (was 20 km/h: a real
+         * turn at 8 km/h was rejected); the phone turned in the hand is caught by the car physics instead.
+         */
+        private const val TURN_MIN_KMH = 8f
         private const val TURN_COOLDOWN_MS = 4000L
 
         /** A repeated first-unlock report within this time does not stretch again. */
         private const val STRETCH_DEDUP_MS = 60_000L
 
-        /** Below this speed the car counts as standing still; at or above it the companion stays awake. */
+        /**
+         * Below this speed the car counts as standing still for the parking check (TRIP_START). Whether the car moves
+         * at all (waking up, no dozing off while driving) has its own hysteresis in [MovementStabilizer].
+         */
         private const val STOPPED_KMH = 3f
 
         /** Speed that counts as "the trip has started". */

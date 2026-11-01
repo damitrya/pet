@@ -44,4 +44,11 @@ class CharacterViewSourceTest {
         assertTrue(code.contains("isRealEnd(d)"))
         assertTrue(code.contains("endAction === action"))
     }
+
+    @Test
+    fun wave7LeansUseTheOrdinaryPlaybackPath() {
+        // The leans are plain one-shot states: no special drawable handling that could bring the NPE back.
+        assertFalse(code.contains("INERTIA"))
+        assertFalse(code.contains("inertia"))
+    }
 }

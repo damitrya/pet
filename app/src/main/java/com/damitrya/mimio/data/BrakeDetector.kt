@@ -20,9 +20,21 @@ import kotlin.math.sqrt
  * within [CONFIRM_MS] that the car really slowed down. Without any GPS data the legacy check of
  * the phone's X/Y axes is used (works when the phone lies flat).
  *
+ * With a shared [frame] (wave 7, the app) the forward axis is the one [VehicleFrameEstimator] learns for the leans:
+ * one calibration for every car reaction, robust against single contradicting lessons and handling of the phone.
+ * The axis then counts as learned only while that calibration is READY; while it is suspended (the phone is being
+ * moved, the data disagree) braking falls back to the jolt that GPS must confirm — ALERT is never switched off, it
+ * only needs the GPS to agree when the phone's orientation cannot be trusted. Without a frame (tests of the original
+ * behaviour) the detector learns its own axis as described above.
+ *
  * Pure logic, no Android dependencies; times are in milliseconds of one monotonic clock.
  */
-class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAKING_THRESHOLD) {
+class BrakeDetector(
+    var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAKING_THRESHOLD,
+    private val frame: VehicleFrameEstimator? = null
+) {
+
+    private val frameAxis = FloatArray(3)
 
     private val gravity = FloatArray(3)
     private var hasGravity = false
@@ -55,7 +67,7 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
     private var joltActive = false
     private var pendingSpeedKmh = 0f
 
-    val isAxisLearned: Boolean get() = forwardSamples >= MIN_LEARN_SAMPLES
+    val isAxisLearned: Boolean get() = if (frame != null) frame.isReady else forwardSamples >= MIN_LEARN_SAMPLES
 
     /** Which comparison the last acceleration sample went through (diagnostics; detection never reads it). */
     enum class Check {
@@ -87,7 +99,7 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         }
 
     /** GPS intervals that have taught the current axis so far (READY at [MIN_LEARN_SAMPLES]). */
-    val learnSamples: Int get() = forwardSamples
+    val learnSamples: Int get() = frame?.lessons ?: forwardSamples
 
     /** Last GPS speed given to [onSpeed], or -1 before the first one. */
     val speedKmh: Float get() = lastSpeedKmh
@@ -121,7 +133,7 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
     fun onGravity(x: Float, y: Float, z: Float, now: Long) {
         gravity[0] = x; gravity[1] = y; gravity[2] = z
         hasGravity = true
-        if (forwardSamples == 0) return
+        if (frame != null || forwardSamples == 0) return
         val g = norm(gravity)
         if (g < 1f) return
         if (norm(axisGravity) < 0.5f) {
@@ -149,8 +161,9 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         for (i in 0..2) sumH[i] += h[i]
         countH++
 
-        if (isAxisLearned) {
-            val along = h[0] * forward[0] + h[1] * forward[1] + h[2] * forward[2]
+        val axis = if (frame == null) forward else if (frame.axis(frameAxis)) frameAxis else null
+        if (isAxisLearned && axis != null) {
+            val along = h[0] * axis[0] + h[1] * axis[1] + h[2] * axis[2]
             lastCheck = Check.AXIS
             lastValue = along
             val braking = along < threshold && lastSpeedKmh >= MIN_SPEED_KMH
@@ -178,7 +191,7 @@ class BrakeDetector(var threshold: Float = SettingsRepository.DEFAULT_ALERT_BRAK
         // Repeated reports between GPS fixes (other sensor changes re-send the same speed)
         // must not cut the learning interval short.
         if (lastSpeedAt != 0L && now - lastSpeedAt < MIN_SPEED_INTERVAL_MS) return false
-        if (lastSpeedAt != 0L && countH > 0) {
+        if (frame == null && lastSpeedAt != 0L && countH > 0) {
             val dt = (now - lastSpeedAt) / 1000f
             if (dt in 0.3f..3f) learn((kmh - lastSpeedKmh) / 3.6f / dt)
         }

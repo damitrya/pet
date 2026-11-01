@@ -1,5 +1,6 @@
 package com.damitrya.mimio.diagnostics
 
+import com.damitrya.mimio.data.CarMotionConfig
 import com.damitrya.mimio.data.GpsFixGate
 import java.io.Reader
 import java.io.Writer
@@ -94,10 +95,23 @@ object DrivingDiagnosticsExporter {
         line("peaks brakeAlongAxis=${s.peakBrakeAxis.f1()} m/s2 lateral=${s.peakLateral.f1()} m/s2 yawRate=${s.peakYawRate.f2()} rad/s")
         line("candidate = at least ${(START_FRACTION * 100).toInt()}% of the detector's threshold")
 
+        section("7a. Физика автомобиля (wave 7)")
+        line("vehicleAxis=${s.vehicleCalibration.ifEmpty { "—" }} lastTransitionReason=${s.vehicleCalibrationReason.ifEmpty { "—" }} quality=${if (s.vehicleQuality.isNaN()) "n/a" else s.vehicleQuality.f2()}")
+        if (s.calibrationTransitions.isEmpty()) line("calibrationTransitions: —")
+        s.calibrationTransitions.forEach { (k, v) -> line("calibrationTransition $k=$v") }
+        line("phoneMovingEpisodes=${s.phoneMovingEpisodes}")
+        line("peaks longitudinal accel=${s.peakLongAccel.f1()} decel=${s.peakLongDecel.f1()} m/s2, lateral (accelerometer)=${s.peakLateralAccel.f1()} m/s2 (READY, phone still)")
+        if (s.inertiaCandidates.isEmpty()) line("manoeuvres: —")
+        s.inertiaCandidates.forEach { (k, v) -> line("manoeuvre $k seen=$v accepted=${s.inertiaAccepted[k] ?: 0}") }
+        reasons("manoeuvre rejectedBy", s.inertiaReasons)
+        if (s.inertiaPlayed.isEmpty()) line("leansPlayed: —")
+        s.inertiaPlayed.forEach { (k, v) -> line("leanPlayed $k=$v") }
+        line("thresholds turn ${CarMotionConfig.DEFAULT.softTurn.f1()}/${CarMotionConfig.DEFAULT.strongTurn.f1()}, brake ${CarMotionConfig.DEFAULT.softBrake.f1()}/${CarMotionConfig.DEFAULT.strongBrake.f1()}, accel ${CarMotionConfig.DEFAULT.softAccel.f1()}/${CarMotionConfig.DEFAULT.strongAccel.f1()} m/s2, min ${CarMotionConfig.DEFAULT.minSpeedKmh.f1()} km/h, sustain ${CarMotionConfig.DEFAULT.sustainMs} ms, pause ${CarMotionConfig.DEFAULT.softCooldownMs} ms")
+
         section("8. Запросы и воспроизведение анимаций")
         if (s.requests.isEmpty()) line("requests: —")
         s.requests.forEach { (k, v) -> line("request $k=$v") }
-        line("reactionsPlayed=${s.reactionsPlayed} (ALERT, TURN_LEFT/RIGHT, TRIP_START, ARRIVAL with the overlay shown)")
+        line("reactionsPlayed=${s.reactionsPlayed} (ALERT, TURN_LEFT/RIGHT, INERTIA_*, TRIP_START, ARRIVAL with the overlay shown)")
         line("reactionsWhileHidden=${s.reactionsHidden}")
         line("playbackWithoutFile=${s.playbackMissing}")
         s.stateChanges.entries.sortedByDescending { it.value }.forEach { line("stateChanges ${it.key}=${it.value}") }
@@ -118,7 +132,7 @@ object DrivingDiagnosticsExporter {
         DiagnosticReason.GPS_STALE to "измерение старше 10 с (или последняя пригодная скорость устарела)",
         DiagnosticReason.LOCATION_INACCURATE to "горизонтальная погрешность больше GpsFixGate.MAX_ACCURACY_M (50 м)",
         DiagnosticReason.SPEED_UNAVAILABLE to "в измерении нет скорости; код такое измерение принимает со скоростью 0 (только предупреждение)",
-        DiagnosticReason.SPEED_BELOW_THRESHOLD to "скорость ниже минимума проверки (торможение 8 км/ч, реакция на поворот 20 км/ч)",
+        DiagnosticReason.SPEED_BELOW_THRESHOLD to "скорость ниже минимума проверки (торможение, поворот, наклон: 8 км/ч)",
         DiagnosticReason.SENSOR_UNAVAILABLE to "датчика нет или слушатель не зарегистрирован",
         DiagnosticReason.CALIBRATION_PENDING to "ось движения ещё не выучена: рывок ждёт подтверждения замедления по GPS",
         DiagnosticReason.ACCELERATION_BELOW_THRESHOLD to "ускорение не достигло порога детектора",
@@ -126,6 +140,12 @@ object DrivingDiagnosticsExporter {
         DiagnosticReason.COOLDOWN_ACTIVE to "реакция была недавно (ALERT 3 с, поворот 4 с)",
         DiagnosticReason.STATE_BLOCKED to "текущее состояние персонажа не позволяет начать реакцию",
         DiagnosticReason.ANIMATION_NOT_CONFIGURED to "на событие нет реакции в коде или нет файла анимации",
-        DiagnosticReason.OVERLAY_HIDDEN to "состояние сменилось, но персонаж скрыт"
+        DiagnosticReason.OVERLAY_HIDDEN to "состояние сменилось, но персонаж скрыт",
+        DiagnosticReason.PHONE_MOVING to "телефон, вероятно, перемещали относительно автомобиля (взяли в руки, повернули)",
+        DiagnosticReason.CALIBRATION_UNRELIABLE to "направление движения автомобиля ещё не определено надёжно (калибровка не READY)",
+        DiagnosticReason.INERTIA_COOLDOWN to "наклон был меньше 4 с назад",
+        DiagnosticReason.EVENT_TOO_SHORT to "манёвр превысил порог меньше чем на 300 мс",
+        DiagnosticReason.SENSOR_DATA_INCONSISTENT to "акселерометр и изменение GPS-скорости (или вращение) противоречат друг другу",
+        DiagnosticReason.REACTIONS_DISABLED to "наклоны и реакции на повороты выключены в настройках"
     )
 }
