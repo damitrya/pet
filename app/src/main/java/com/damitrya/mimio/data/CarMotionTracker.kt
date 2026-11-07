@@ -66,6 +66,8 @@ class CarMotionTracker(
      */
     private var handledYaw = 0f
     private var recentYaw = 0f
+    /** When the phone started being handled (diagnostics: how long the episode was). */
+    private var handledSince = 0L
     private var sharpTurn = false
     private var sharpDirection = TurnDirection.NONE
 
@@ -91,7 +93,7 @@ class CarMotionTracker(
 
     init {
         frame.onTransition = { from, to, reason ->
-            DrivingDiagnostics.sink?.onCalibrationChange(from, to, reason, frame.quality, frame.lessons)
+            DrivingDiagnostics.sink?.onCalibrationChange(from, to, reason, frame.quality, frame.lessons, frame.lastTransition)
         }
     }
 
@@ -150,7 +152,7 @@ class CarMotionTracker(
 
         val speed = if (lastSpeedKmh >= 0f) lastSpeedKmh else 0f
         lastKinematicLateral = yawRate * speed / 3.6f
-        lateral.onSample(lastKinematicLateral, at, speed, gateFn, outcomeFn, eventFn)
+        lateral.onSample(lastKinematicLateral, at, speed, gateFn, outcomeFn, eventFn, raw = rawYaw * speed / 3.6f)
         val strong = lateral.isStrongActive
         val dir = when (lateral.currentKind) {
             InertiaKind.TURN_LEFT -> TurnDirection.LEFT
@@ -176,7 +178,8 @@ class CarMotionTracker(
             lastLateralAccel = Float.NaN
             longSmooth = 0f
             latSmooth = Float.NaN
-            longitudinal.reset()          // no axis, no longitudinal manoeuvre (it starts afresh with the next axis)
+            // No axis, no longitudinal manoeuvre (it starts afresh with the next axis); one still undecided is reported.
+            longitudinal.abandon(DiagnosticReason.CALIBRATION_UNRELIABLE, at, speedOrZero(), outcomeFn)
             DrivingDiagnostics.sink?.onMotionSample(this, sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]))
             return
         }
@@ -193,7 +196,7 @@ class CarMotionTracker(
         latSmooth = if (latSmooth.isNaN()) lastLateralAccel
         else latSmooth + (lastLateralAccel - latSmooth) * smoothing(dt, config.longitudinalTauMs)
         val speed = if (lastSpeedKmh >= 0f) lastSpeedKmh else 0f
-        longitudinal.onSample(longSmooth, at, speed, gateFn, outcomeFn, eventFn)
+        longitudinal.onSample(longSmooth, at, speed, gateFn, outcomeFn, eventFn, raw = raw)
         DrivingDiagnostics.sink?.onMotionSample(this, sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]))
         DrivingDiagnostics.sink?.onLongitudinalSample(longSmooth, config.strongAccel, isStrongAcceleration)
     }
@@ -229,19 +232,29 @@ class CarMotionTracker(
         if (kind == InertiaKind.BRAKE || kind == InertiaKind.ACCELERATE) {
             return when (frame.state) {
                 CalibrationState.READY -> null
-                CalibrationState.SUSPENDED ->
-                    if (frame.suspendReason == CalibrationReason.PHONE_MOVING) DiagnosticReason.PHONE_MOVING
-                    else DiagnosticReason.SENSOR_DATA_INCONSISTENT
+                CalibrationState.SUSPENDED -> when (frame.suspendReason) {
+                    CalibrationReason.PHONE_MOVING -> DiagnosticReason.PHONE_MOVING
+                    // Kept after a rotation while handled, waiting for a GPS lesson to confirm it.
+                    CalibrationReason.AXIS_UNCONFIRMED -> DiagnosticReason.CALIBRATION_UNRELIABLE
+                    else -> DiagnosticReason.SENSOR_DATA_INCONSISTENT
+                }
                 else -> DiagnosticReason.CALIBRATION_UNRELIABLE
             }
         }
         return null
     }
 
-    private fun outcome(o: InertiaOutcome) {
+    private fun outcome(decided: InertiaOutcome) {
+        // The context of the decision, for the diagnostics (a manoeuvre is decided a few times per minute at most).
+        val o = decided.copy(
+            calibration = frame.state, calibrationQuality = frame.quality,
+            phoneMoving = phone.isMoving || frame.isPhoneMoving
+        )
         onOutcome?.invoke(o)
         DrivingDiagnostics.sink?.onInertiaCandidate(o)
     }
+
+    private fun speedOrZero() = if (lastSpeedKmh >= 0f) lastSpeedKmh else 0f
 
     private fun event(e: CarMotionEvent) {
         // A sharp turn plays the existing TURN_LEFT/RIGHT through onSharpTurnChanged, not a lean.
@@ -250,18 +263,24 @@ class CarMotionTracker(
     }
 
     private fun onPhoneMotionChanged() {
+        var detail = ""
         if (phone.isMoving) {
             handledYaw = recentYaw
-            frame.suspendForPhoneMotion()
-            // Whatever was building up is the hand, not the car.
-            longitudinal.reset()
-            lateral.reset()
+            handledSince = now
+            // Whatever was building up is the hand, not the car (an undecided candidate is reported as such).
+            longitudinal.abandon(DiagnosticReason.PHONE_MOVING, now, speedOrZero(), outcomeFn)
+            lateral.abandon(DiagnosticReason.PHONE_MOVING, now, speedOrZero(), outcomeFn)
+            frame.suspendForPhoneMotion(now, "cause ${phone.cause}")
             setSharpTurn(false, TurnDirection.NONE)
         } else {
-            // Turned around the vertical while in the hand (or the car turned meanwhile): learn the axis anew.
-            frame.onPhoneStable(turnedAroundVertical = kotlin.math.abs(handledYaw) > HANDLED_YAW_RAD)
+            // Turned around the vertical while in the hand — or the car turned meanwhile, which the gyroscope cannot
+            // tell apart: the frame keeps the axis, but a GPS lesson must confirm it first.
+            val turned = kotlin.math.abs(handledYaw) > HANDLED_YAW_RAD
+            detail = "handled ${now - handledSince} ms, yaw ${Math.toDegrees(handledYaw.toDouble()).toInt()}°" +
+                ", speed ${if (freshSpeed() < 0f) "n/a" else "${freshSpeed().toInt()} km/h"}"
+            frame.onPhoneStable(turnedAroundVertical = turned, now = now, detail = detail)
         }
-        DrivingDiagnostics.sink?.onPhoneMotion(phone.isMoving, phone.cause)
+        DrivingDiagnostics.sink?.onPhoneMotion(phone.isMoving, phone.cause, detail)
     }
 
     private fun setSharpTurn(turning: Boolean, direction: TurnDirection) {

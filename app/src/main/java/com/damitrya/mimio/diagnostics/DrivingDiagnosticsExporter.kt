@@ -106,7 +106,7 @@ object DrivingDiagnosticsExporter {
         reasons("manoeuvre rejectedBy", s.inertiaReasons)
         if (s.inertiaPlayed.isEmpty()) line("leansPlayed: —")
         s.inertiaPlayed.forEach { (k, v) -> line("leanPlayed $k=$v") }
-        line("thresholds turn ${CarMotionConfig.DEFAULT.softTurn.f1()}/${CarMotionConfig.DEFAULT.strongTurn.f1()}, brake ${CarMotionConfig.DEFAULT.softBrake.f1()}/${CarMotionConfig.DEFAULT.strongBrake.f1()}, accel ${CarMotionConfig.DEFAULT.softAccel.f1()}/${CarMotionConfig.DEFAULT.strongAccel.f1()} m/s2, min ${CarMotionConfig.DEFAULT.minSpeedKmh.f1()} km/h, sustain ${CarMotionConfig.DEFAULT.sustainMs} ms, pause ${CarMotionConfig.DEFAULT.softCooldownMs} ms")
+        line("thresholds turn ${CarMotionConfig.DEFAULT.softTurn.f1()}/${CarMotionConfig.DEFAULT.strongTurn.f1()}, brake ${CarMotionConfig.DEFAULT.softBrake.f1()}/${CarMotionConfig.DEFAULT.strongBrake.f1()}, accel ${CarMotionConfig.DEFAULT.softAccel.f1()}/${CarMotionConfig.DEFAULT.strongAccel.f1()} m/s2, min ${CarMotionConfig.DEFAULT.minSpeedKmh.f1()} km/h, sustain ${CarMotionConfig.DEFAULT.sustainMs} ms (dips up to ${CarMotionConfig.DEFAULT.dipToleranceMs} ms), pause ${CarMotionConfig.DEFAULT.softCooldownMs} ms")
 
         section("8. Запросы и воспроизведение анимаций")
         if (s.requests.isEmpty()) line("requests: —")
@@ -144,7 +144,9 @@ object DrivingDiagnosticsExporter {
         DiagnosticReason.PHONE_MOVING to "телефон, вероятно, перемещали относительно автомобиля (взяли в руки, повернули)",
         DiagnosticReason.CALIBRATION_UNRELIABLE to "направление движения автомобиля ещё не определено надёжно (калибровка не READY)",
         DiagnosticReason.INERTIA_COOLDOWN to "наклон был меньше 4 с назад",
-        DiagnosticReason.EVENT_TOO_SHORT to "манёвр превысил порог меньше чем на 300 мс",
+        DiagnosticReason.EVENT_TOO_SHORT to "всё событие (от первого до последнего превышения порога) короче 300 мс",
+        DiagnosticReason.THRESHOLD_NOT_SUSTAINED to "событие длилось 300 мс и дольше, но значение снова и снова падало ниже порога: непрерывно (с провалами до 150 мс) порог не держался 300 мс",
+        DiagnosticReason.ALREADY_SHOWN to "на этот же манёвр уже показана более сильная реакция (торможение — ALERT)",
         DiagnosticReason.SENSOR_DATA_INCONSISTENT to "акселерометр и изменение GPS-скорости (или вращение) противоречат друг другу",
         DiagnosticReason.REACTIONS_DISABLED to "наклоны и реакции на повороты выключены в настройках"
     )

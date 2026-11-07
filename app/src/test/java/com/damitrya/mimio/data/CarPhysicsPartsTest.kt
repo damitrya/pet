@@ -195,7 +195,9 @@ class CarPhysicsPartsTest {
     fun accelerationsThatDoNotFitTheGpsSuspend() {
         var (f, t) = learned()
         var kmh = 36.2f
-        repeat(3) {
+        // Wave 8: the first one is still compared with the previous (fitting) interval — the GPS speed lags by up to
+        // a fix — so it takes three mismatches after it.
+        repeat(4) {
             t += 1_000; kmh += 5.4f
             f.interval(floatArrayOf(0f, 0f, -9f), kmh, t)    // 9 m/s² felt, 1.5 m/s² driven
         }
@@ -233,10 +235,13 @@ class CarPhysicsPartsTest {
         assertEquals(CalibrationState.UNCALIBRATED, f.state)
         assertEquals(CalibrationReason.ORIENTATION_CHANGED, f.lastReason)
 
+        // Wave 8: a swivel gravity cannot see keeps the axis, unconfirmed: no reactions until a GPS lesson decides
+        // (the gyroscope also sees the car's own turn while the phone is handled). See CalibrationStabilityTest.
         val (g, _) = learned()
         g.suspendForPhoneMotion()
         g.onPhoneStable(turnedAroundVertical = true)
-        assertEquals("a swivel gravity cannot see", CalibrationState.UNCALIBRATED, g.state)
+        assertEquals(CalibrationState.SUSPENDED, g.state)
+        assertEquals(CalibrationReason.AXIS_UNCONFIRMED, g.suspendReason)
     }
 
     // ---- PhoneMotionDetector

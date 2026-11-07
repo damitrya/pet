@@ -54,7 +54,9 @@ class CarPhysicsDiagnosticsTest {
         val j = journal
         assertTrue(j.contains("CALIBRATION\nvehicleAxis=READY\nfrom=LEARNING\ntransitionReason=LEARNED\nquality=0.97\nlessons=3"))
         assertTrue(j.contains("PHONE_MOTION\nphoneMoving=true\ncause=tilt 34°\nreason=PHONE_MOVING"))
-        assertTrue(j.contains("INERTIA_CANDIDATE\nkind=BRAKE\nlevel=SOFT\npeak=1.6 m/s2\nduration=300 ms\nspeed=42.0 km/h\naccepted=true"))
+        // the wave 7 keys come first and unchanged; wave 8 adds the conditions before accepted / reason
+        assertTrue(j.contains("INERTIA_CANDIDATE\nkind=BRAKE\nlevel=SOFT\npeak=1.6 m/s2\nduration=300 ms\nspeed=42.0 km/h\n"))
+        assertTrue(j.contains("aboveThreshold=300 ms (needs 300)\nphoneMoving=false\naccepted=true"))
         assertTrue(j.contains("reason=EVENT_TOO_SHORT"))
         assertTrue(j.contains("INERTIA_START\nstate=INERTIA_FORWARD\nfile=inertia_forward\naccepted=true"))
         assertTrue(j.contains("INERTIA_END\nstate=INERTIA_FORWARD\nto=CALM\nafter=2400 ms"))

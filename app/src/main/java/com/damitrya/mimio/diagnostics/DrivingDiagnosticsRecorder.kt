@@ -3,6 +3,8 @@ package com.damitrya.mimio.diagnostics
 import com.damitrya.mimio.data.BrakeDetector
 import com.damitrya.mimio.data.CalibrationReason
 import com.damitrya.mimio.data.CalibrationState
+import com.damitrya.mimio.data.CalibrationTransition
+import com.damitrya.mimio.data.CarMotionConfig
 import com.damitrya.mimio.data.CarMotionTracker
 import com.damitrya.mimio.data.DrivingData
 import com.damitrya.mimio.data.GpsFixGate
@@ -372,33 +374,41 @@ class DrivingDiagnosticsRecorder(
         maybeFlushWindow(now)
     }
 
-    /** The car's forward axis changed state (see [com.damitrya.mimio.data.VehicleFrameEstimator]). */
-    fun onCalibrationChange(from: CalibrationState, to: CalibrationState, reason: CalibrationReason, quality: Float, lessons: Int) {
+    /**
+     * The car's forward axis changed state (see [com.damitrya.mimio.data.VehicleFrameEstimator]); [t] adds the
+     * conditions of the transition (wave 8): time in the previous state, the tilt change, the concrete condition.
+     */
+    fun onCalibrationChange(
+        from: CalibrationState, to: CalibrationState, reason: CalibrationReason, quality: Float, lessons: Int,
+        t: CalibrationTransition? = null
+    ) {
         if (!isRunning) return
         summary.vehicleCalibration = to.name
         summary.vehicleCalibrationReason = reason.name
         summary.vehicleQuality = quality
         summary.calibrationTransitions.inc("${from.name} -> ${to.name} ${reason.name}")
-        emit(
-            DrivingDiagnosticsEvent(
-                DrivingDiagnosticsEvent.Type.CALIBRATION, wallClock(),
-                listOf(
-                    "vehicleAxis" to to.name,
-                    "from" to from.name,
-                    "transitionReason" to reason.name,
-                    "quality" to quality.f2(),
-                    "lessons" to "$lessons"
-                )
-            )
+        val fields = mutableListOf(
+            "vehicleAxis" to to.name,
+            "from" to from.name,
+            "transitionReason" to reason.name,
+            "quality" to quality.f2(),
+            "lessons" to "$lessons"
         )
+        if (t != null) {
+            if (t.timeInStateMs >= 0L) fields += "timeInState" to "${t.timeInStateMs} ms"
+            if (!t.orientationChangeDeg.isNaN()) fields += "orientationChange" to "${t.orientationChangeDeg.f1()} deg"
+            if (t.detail.isNotEmpty()) fields += "condition" to t.detail
+        }
+        emit(DrivingDiagnosticsEvent(DrivingDiagnosticsEvent.Type.CALIBRATION, wallClock(), fields))
     }
 
-    /** The phone probably started / stopped being moved relative to the car. */
-    fun onPhoneMotion(moving: Boolean, cause: String) {
+    /** The phone probably started / stopped being moved relative to the car; [detail]: how the episode went. */
+    fun onPhoneMotion(moving: Boolean, cause: String, detail: String = "") {
         if (!isRunning) return
         if (moving) summary.phoneMovingEpisodes++
         val fields = mutableListOf("phoneMoving" to "$moving")
         if (moving) fields += "cause" to cause
+        if (detail.isNotEmpty()) fields += "episode" to detail
         emit(
             DrivingDiagnosticsEvent(
                 DrivingDiagnosticsEvent.Type.PHONE_MOTION, wallClock(), fields,
@@ -407,25 +417,32 @@ class DrivingDiagnosticsRecorder(
         )
     }
 
-    /** A manoeuvre reached a level: accepted (handed to the state machine) or the reason it was not. */
+    /**
+     * A manoeuvre reached a level: accepted (handed to the state machine) or the reason it was not. Wave 8 adds what
+     * is needed to understand a rejection without another drive: the raw peak next to the smoothed one, the
+     * continuous run above the threshold next to the event's duration, the threshold, the calibration and the phone.
+     * The first five keys are those of wave 7.
+     */
     fun onInertiaCandidate(o: InertiaOutcome) {
         if (!isRunning) return
         val key = "${o.kind.name} ${o.level.name}"
         summary.inertiaCandidates.inc(key)
         if (o.accepted) summary.inertiaAccepted.inc(key) else summary.inertiaReasons.inc("${o.kind.name} ${o.reason!!.name}")
-        emit(
-            DrivingDiagnosticsEvent(
-                DrivingDiagnosticsEvent.Type.INERTIA_CANDIDATE, wallClock(),
-                listOf(
-                    "kind" to o.kind.name,
-                    "level" to o.level.name,
-                    "peak" to "${o.peak.f1()} m/s2",
-                    "duration" to "${o.durationMs} ms",
-                    "speed" to "${o.speedKmh.f1()} km/h"
-                ),
-                o.accepted, o.reason
-            )
+        val fields = mutableListOf(
+            "kind" to o.kind.name,
+            "level" to o.level.name,
+            "peak" to "${o.peak.f1()} m/s2",
+            "duration" to "${o.durationMs} ms",
+            "speed" to "${o.speedKmh.f1()} km/h"
         )
+        if (!o.rawPeak.isNaN()) fields += "rawPeak" to "${o.rawPeak.f1()} m/s2"
+        fields += "aboveThreshold" to "${o.aboveMs} ms (needs ${CarMotionConfig.DEFAULT.sustainMs})"
+        if (o.episodeMs != o.durationMs) fields += "episode" to "${o.episodeMs} ms"
+        if (!o.threshold.isNaN()) fields += "threshold" to "${o.threshold.f1()} m/s2"
+        o.endedBy?.let { fields += "endedBy" to it }
+        o.calibration?.let { fields += "calibration" to "${it.name} quality=${o.calibrationQuality.f2()}" }
+        fields += "phoneMoving" to "${o.phoneMoving}"
+        emit(DrivingDiagnosticsEvent(DrivingDiagnosticsEvent.Type.INERTIA_CANDIDATE, wallClock(), fields, o.accepted, o.reason))
     }
 
     /** The state machine's moving / stopped changed; [stopKind] says what kind of stop a start leaves. */
