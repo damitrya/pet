@@ -1,5 +1,6 @@
 package com.damitrya.mimio.data
 
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.sqrt
 
@@ -45,8 +46,33 @@ enum class CalibrationReason {
     CONSISTENT_AGAIN,
 
     /** Profile switch / service start. */
-    RESET
+    RESET,
+
+    /**
+     * Wave 8: the phone is still again with the same tilt, but the gyroscope saw it (or the car, which it cannot tell
+     * apart) turn around the vertical while it was handled. The axis is kept, the reactions stay paused until a GPS
+     * lesson confirms it ([AXIS_CONFIRMED]) or shows the holder was swivelled ([HOLDER_ROTATED]).
+     */
+    AXIS_UNCONFIRMED,
+
+    /** Wave 8: the first GPS lesson after [AXIS_UNCONFIRMED] agrees with the kept axis. */
+    AXIS_CONFIRMED
 }
+
+/** What the calibration knew when it changed (diagnostics: the conditions of the transition, not only its name). */
+data class CalibrationTransition(
+    val from: CalibrationState,
+    val to: CalibrationState,
+    val reason: CalibrationReason,
+    val quality: Float,
+    val lessons: Int,
+    /** How long the calibration had been in [from] (ms), -1 when unknown. */
+    val timeInStateMs: Long,
+    /** Angle (°) between the phone's tilt now and the one the axis was learned with; NaN without an axis. */
+    val orientationChangeDeg: Float,
+    /** The concrete condition (counts, ratios, the rotation while handled…); empty when the reason says it all. */
+    val detail: String
+)
 
 /**
  * The car's axes in phone coordinates, whatever the mount (upright, landscape, sideways in a holder, flat).
@@ -63,6 +89,19 @@ enum class CalibrationReason {
  * the axis is replaced by theirs. Contradictions that do not agree, or accelerations whose size does not fit the
  * GPS speed change, suspend the reactions (SENSOR_DATA_INCONSISTENT) until a consistent lesson comes.
  *
+ * Wave 8 (the drive of 7 November: 23 × READY → SUSPENDED SENSOR_DATA_INCONSISTENT, the axis often lost):
+ * - "straight" also means little centripetal acceleration for the speed ([LESSON_MAX_LATERAL_SHARE]): 0.12 rad/s
+ *   at 90 km/h is a 3 m/s² highway bend, and such an interval taught a direction tens of degrees off;
+ * - the GPS speed lags the accelerometer by up to a fix: an interval whose own acceleration does not fit is
+ *   compared with the previous interval too before it counts as a mismatch;
+ * - mismatches count only in a row, within [MISMATCH_WINDOW_MS] (before: three in the whole drive were enough);
+ * - handling the phone while there is no axis changes no state (it used to log
+ *   UNCALIBRATED → SUSPENDED → UNCALIBRATED "PHONE_STABLE_SAME_ORIENTATION" each time);
+ * - a rotation around the vertical seen while the phone was handled no longer erases the axis (the gyroscope sees
+ *   the car's own turns too): the axis is kept but unconfirmed ([CalibrationReason.AXIS_UNCONFIRMED]) until the
+ *   next GPS lesson decides; a real tilt change (> [SAME_ORIENTATION_DEG]) still relearns it at once;
+ * - data found inconsistent before the phone was handled stay inconsistent after it.
+ *
  * Handling the phone ([suspendForPhoneMotion] / [onPhoneStable]) only suspends: once the phone is still in the
  * orientation it had when the axis was learned (within [SAME_ORIENTATION_DEG]) the axis is used again, otherwise it
  * is learned anew. A stop, GPS loss or missing lessons never erase the axis.
@@ -71,13 +110,20 @@ enum class CalibrationReason {
  */
 class VehicleFrameEstimator {
 
-    /** Told every state change. */
+    /**
+     * Told every state change, and a change of the suspension's reason while SUSPENDED (from == to); the conditions
+     * are in [lastTransition].
+     */
     var onTransition: ((from: CalibrationState, to: CalibrationState, reason: CalibrationReason) -> Unit)? = null
 
     var state: CalibrationState = CalibrationState.UNCALIBRATED
         private set
 
     var lastReason: CalibrationReason = CalibrationReason.RESET
+        private set
+
+    /** The last transition with its conditions (diagnostics). */
+    var lastTransition: CalibrationTransition? = null
         private set
 
     /** Agreement of the GPS lessons with the axis, 0–1. */
@@ -109,9 +155,17 @@ class VehicleFrameEstimator {
     private var beforeSuspend = CalibrationState.UNCALIBRATED
     private var phoneMoving = false
 
+    /** The data were inconsistent when the phone was picked up: they stay so until a consistent lesson. */
+    private var inconsistent = false
+
+    /** The axis is kept after a rotation around the vertical while handled: the next lesson must confirm it. */
+    private var unverified = false
+
     /** Contradicting lessons in a row (directions), and accelerations that did not fit the GPS. */
     private val contradictions = ArrayList<FloatArray>()
     private var mismatches = 0
+    private var lastMismatchAt = 0L
+    private var lastMismatchRatio = Float.NaN
 
     /** Horizontal acceleration and |yaw rate| summed over the current GPS interval. */
     private val sumH = FloatArray(3)
@@ -119,8 +173,17 @@ class VehicleFrameEstimator {
     private var sumYaw = 0f
     private var countYaw = 0
 
+    /** Mean horizontal acceleration and |yaw rate| of the previous GPS interval (the GPS speed lags). */
+    private val prevMean = FloatArray(3)
+    private var prevYaw = 0f
+    private var hasPrev = false
+
     private var lastSpeedMps = -1f
     private var lastSpeedAt = 0L
+
+    /** Latest time seen, and since when the calibration is in its state. */
+    private var nowMs = 0L
+    private var stateSince = 0L
 
     /** Result of the last GPS interval (diagnostics): its acceleration from GPS, NaN when none. */
     var lastGpsAccel: Float = Float.NaN
@@ -136,20 +199,26 @@ class VehicleFrameEstimator {
         lessonWeight = 0f
         contradictions.clear()
         mismatches = 0
+        lastMismatchAt = 0L
         phoneMoving = false
+        inconsistent = false
+        unverified = false
         suspendReason = null
         clearInterval()
+        hasPrev = false
         lastSpeedMps = -1f
         lastSpeedAt = 0L
         state = CalibrationState.UNCALIBRATED
         lastReason = CalibrationReason.RESET
-        if (from != state) onTransition?.invoke(from, state, CalibrationReason.RESET)
+        if (from != state) notify(from, CalibrationReason.RESET, "")
+        stateSince = nowMs
     }
 
     /** GPS gone for a while: the next fix starts a new interval (the axis is kept). */
     fun onGpsGap() {
         lastSpeedAt = 0L
         clearInterval()
+        hasPrev = false
     }
 
     fun onGravity(x: Float, y: Float, z: Float) {
@@ -210,51 +279,75 @@ class VehicleFrameEstimator {
     /** Speed (m/s) of the last usable fix, -1 = none. */
     val speedMps: Float get() = lastSpeedMps
 
+    /** Angle (°) between the tilt now and the one the axis was learned with; NaN without an axis or gravity. */
+    fun orientationChangeDeg(): Float {
+        if (!hasAxis || !hasGravity) return Float.NaN
+        val cos = dot(up, axisUp).coerceIn(-1f, 1f)
+        return Math.toDegrees(kotlin.math.acos(cos).toDouble()).toFloat()
+    }
+
     /**
      * A new usable GPS speed. The interval since the previous one becomes a lesson when the speed clearly changed
      * while driving straight and the phone stood still in its holder.
      */
     fun onSpeed(kmh: Float, now: Long) {
+        nowMs = maxOf(nowMs, now)
         val v = kmh / 3.6f
         lastGpsAccel = Float.NaN
-        if (lastSpeedAt != 0L && countH >= MIN_INTERVAL_SAMPLES) {
-            val dt = (now - lastSpeedAt) / 1000f
-            if (dt in MIN_INTERVAL_S..MAX_INTERVAL_S) {
-                val a = (v - lastSpeedMps) / dt
-                lastGpsAccel = a
-                if (!phoneMoving) lesson(a, maxOf(v, lastSpeedMps))
-            }
+        val interval = lastSpeedAt != 0L && countH >= MIN_INTERVAL_SAMPLES &&
+            ((now - lastSpeedAt) / 1000f) in MIN_INTERVAL_S..MAX_INTERVAL_S
+        if (interval) {
+            val a = (v - lastSpeedMps) / ((now - lastSpeedAt) / 1000f)
+            lastGpsAccel = a
+            if (!phoneMoving) lesson(a, maxOf(v, lastSpeedMps), now)
+            for (i in 0..2) prevMean[i] = sumH[i] / countH
+            prevYaw = if (countYaw > 0) sumYaw / countYaw else 0f
+            hasPrev = !phoneMoving
+        } else {
+            hasPrev = false
         }
         clearInterval()
         lastSpeedMps = v
         lastSpeedAt = now
     }
 
-    private fun lesson(gpsAccel: Float, speedMps: Float) {
+    private fun lesson(gpsAccel: Float, speedMps: Float, now: Long) {
         if (abs(gpsAccel) < LESSON_MIN_GPS_ACCEL || speedMps < LESSON_MIN_SPEED_MPS) return
-        if (countYaw > 0 && sumYaw / countYaw > LESSON_MAX_YAW) return      // a bend: centripetal acceleration mixes in
-        val mean = FloatArray(3) { sumH[it] / countH }
+        val yaw = if (countYaw > 0) sumYaw / countYaw else 0f
+        if (isBend(yaw, speedMps, gpsAccel)) return      // a bend: centripetal acceleration mixes in
+        val cur = FloatArray(3) { sumH[it] / countH }
+        // The GPS speed lags: when this interval's acceleration does not fit, the previous one may (the end of a
+        // braking: the car already rolls, the GPS still slows down).
+        val mean = when {
+            fits(cur, gpsAccel) -> cur
+            hasPrev && !isBend(prevYaw, speedMps, gpsAccel) && fits(prevMean, gpsAccel) -> prevMean.copyOf()
+            else -> {
+                lastMismatchRatio = norm(cur) / abs(gpsAccel)
+                mismatch(now)
+                return
+            }
+        }
+        mismatches = 0                                     // the sizes fit: the data are consistent
         val n = norm(mean)
-        if (n < LESSON_MIN_ACCEL) {
-            mismatch()
-            return
-        }
-        val ratio = n / abs(gpsAccel)
-        if (ratio < MIN_RATIO || ratio > MAX_RATIO) {
-            mismatch()
-            return
-        }
         val sign = if (gpsAccel > 0) 1f else -1f
         val dir = FloatArray(3) { sign * mean[it] / n }
         val weight = abs(gpsAccel)
 
         if (!hasAxis || state == CalibrationState.LEARNING || state == CalibrationState.UNCALIBRATED) {
+            if (unverified && hasAxis) {
+                unverified = false
+                val axis = FloatArray(3)
+                if (axis(axis) && dot(dir, axis) < AGREE_COS) {
+                    // Turned in the holder while it was handled: start over from this lesson.
+                    dropAxis(CalibrationReason.HOLDER_ROTATED, "lesson ${angleDeg(dir, axis)}° off the kept axis")
+                }
+            }
             learn(dir, weight)
             return
         }
         val axis = FloatArray(3)
         if (!axis(axis)) {
-            dropAxis(CalibrationReason.ORIENTATION_CHANGED)
+            dropAxis(CalibrationReason.ORIENTATION_CHANGED, "axis no longer horizontal")
             learn(dir, weight)
             return
         }
@@ -266,10 +359,25 @@ class VehicleFrameEstimator {
             lessons++
             quality = quality * (1 - QUALITY_EMA) + agree * QUALITY_EMA
             contradictions.clear()
-            mismatches = 0
-            if (state == CalibrationState.SUSPENDED && suspendReason == CalibrationReason.SENSOR_DATA_INCONSISTENT) {
-                resume(CalibrationReason.CONSISTENT_AGAIN)
+            if (state == CalibrationState.SUSPENDED && !phoneMoving) {
+                when {
+                    unverified -> {
+                        unverified = false
+                        resume(CalibrationReason.AXIS_CONFIRMED, "lesson ${angleDeg(dir, axis)}° from the kept axis")
+                    }
+                    suspendReason == CalibrationReason.SENSOR_DATA_INCONSISTENT -> {
+                        inconsistent = false
+                        resume(CalibrationReason.CONSISTENT_AGAIN, "lesson ${angleDeg(dir, axis)}° from the axis")
+                    }
+                }
             }
+            return
+        }
+        if (unverified) {
+            // The kept axis is contradicted by the first lesson after the rotation: the holder was turned.
+            unverified = false
+            dropAxis(CalibrationReason.HOLDER_ROTATED, "lesson ${angleDeg(dir, axis)}° off the kept axis")
+            learn(dir, weight)
             return
         }
         quality = quality * (1 - QUALITY_EMA) + maxOf(agree, 0f) * QUALITY_EMA
@@ -281,20 +389,38 @@ class VehicleFrameEstimator {
         if (contradictions.all { dot(it, mean3) >= SELF_AGREE_COS }) {
             // They agree with each other: the holder was swivelled. Their direction is the new axis.
             val lessonsFrom = contradictions.toList()
-            dropAxis(CalibrationReason.HOLDER_ROTATED)
+            dropAxis(CalibrationReason.HOLDER_ROTATED, "$MAX_CONTRADICTIONS lessons agree ${angleDeg(mean3, axis)}° off the axis")
             for (c in lessonsFrom) learn(c, 1f)
         } else {
+            val spread = contradictions.maxOf { angleDeg(it, mean3) }
             contradictions.clear()
-            suspend(CalibrationReason.SENSOR_DATA_INCONSISTENT)
+            suspend(CalibrationReason.SENSOR_DATA_INCONSISTENT, "$MAX_CONTRADICTIONS contradicting lessons, up to ${spread}° from their mean")
         }
     }
 
-    /** The accelerometer and the GPS speed change did not fit together. */
-    private fun mismatch() {
+    /** Too much turning for a lesson: the mean |yaw rate|, or the centripetal acceleration it gives at this speed. */
+    private fun isBend(yaw: Float, speedMps: Float, gpsAccel: Float) =
+        yaw > LESSON_MAX_YAW || yaw * speedMps > LESSON_MAX_LATERAL_SHARE * abs(gpsAccel)
+
+    /** The accelerometer's mean is big enough and its size fits the GPS speed change. */
+    private fun fits(mean: FloatArray, gpsAccel: Float): Boolean {
+        val n = norm(mean)
+        if (n < LESSON_MIN_ACCEL) return false
+        val ratio = n / abs(gpsAccel)
+        return ratio in MIN_RATIO..MAX_RATIO
+    }
+
+    /** The accelerometer and the GPS speed change did not fit together (neither this interval nor the one before). */
+    private fun mismatch(now: Long) {
         if (state != CalibrationState.READY) return
+        if (lastMismatchAt != 0L && now - lastMismatchAt > MISMATCH_WINDOW_MS) mismatches = 0
+        lastMismatchAt = now
         if (++mismatches >= MAX_MISMATCHES) {
             mismatches = 0
-            suspend(CalibrationReason.SENSOR_DATA_INCONSISTENT)
+            suspend(
+                CalibrationReason.SENSOR_DATA_INCONSISTENT,
+                "$MAX_MISMATCHES GPS intervals in a row did not fit the accelerometer (last ratio ${lastMismatchRatio.fmt()})"
+            )
         }
     }
 
@@ -319,58 +445,91 @@ class VehicleFrameEstimator {
                 lessonWeight = 0f
                 lessons = 0
                 hasAxis = false
-                if (!phoneMoving) move(CalibrationState.LEARNING, CalibrationReason.SENSOR_DATA_INCONSISTENT)
+                if (!phoneMoving) move(CalibrationState.LEARNING, CalibrationReason.SENSOR_DATA_INCONSISTENT, "quality ${quality.fmt()} after ${MIN_LESSONS * 3} lessons")
             }
             !phoneMoving && state != CalibrationState.LEARNING -> move(CalibrationState.LEARNING, CalibrationReason.LEARNING_STARTED)
         }
     }
 
-    /** The phone is probably being moved: pause the reactions, keep the axis. */
-    fun suspendForPhoneMotion() {
+    /**
+     * The phone is probably being moved: pause the reactions, keep the axis. Without an axis there is nothing to
+     * pause (the lessons wait for the phone anyway): the state stays as it is.
+     */
+    fun suspendForPhoneMotion(now: Long = nowMs, detail: String = "") {
+        nowMs = maxOf(nowMs, now)
         phoneMoving = true
         clearInterval()
-        suspend(CalibrationReason.PHONE_MOVING)
+        hasPrev = false
+        if (hasAxis) suspend(CalibrationReason.PHONE_MOVING, detail)
     }
 
     /**
-     * The phone is still again. Same orientation as when the axis was learned: the axis is used again; otherwise
-     * it is learned anew. [turnedAroundVertical]: the gyroscope saw the phone turn around the vertical while it was
-     * handled (gravity cannot see that), so the old axis cannot be trusted even if the tilt is the same.
+     * The phone is still again. Same orientation as when the axis was learned: the axis is used again; a tilt
+     * changed by more than [SAME_ORIENTATION_DEG]: it is learned anew. [turnedAroundVertical]: the gyroscope saw a
+     * rotation around the vertical while the phone was handled — the phone turned in the holder, or just the car
+     * turning meanwhile, which the gyroscope cannot tell apart; the axis is kept but must be confirmed by the next GPS
+     * lesson before the reactions come back.
      */
-    fun onPhoneStable(turnedAroundVertical: Boolean = false) {
+    fun onPhoneStable(turnedAroundVertical: Boolean = false, now: Long = nowMs, detail: String = "") {
+        nowMs = maxOf(nowMs, now)
         if (!phoneMoving) return
         phoneMoving = false
         clearInterval()
+        hasPrev = false
         lastSpeedAt = 0L          // the interval spanning the handling is no lesson
-        if (hasAxis && hasGravity && !turnedAroundVertical && dot(up, axisUp) >= SAME_ORIENTATION_COS) {
-            resume(CalibrationReason.PHONE_STABLE_SAME_ORIENTATION)
-        } else if (hasAxis) {
-            dropAxis(CalibrationReason.ORIENTATION_CHANGED)
-        } else {
-            resume(CalibrationReason.PHONE_STABLE_SAME_ORIENTATION)
+        if (state != CalibrationState.SUSPENDED) {
+            // Nothing was paused (no axis then, or it was learned meanwhile). A swivel still needs confirming.
+            if (hasAxis && turnedAroundVertical) unverified = true
+            return
+        }
+        val change = orientationChangeDeg()
+        when {
+            !hasAxis -> resume(CalibrationReason.PHONE_STABLE_SAME_ORIENTATION, detail)
+            !hasGravity || change.isNaN() || change > SAME_ORIENTATION_DEG ->
+                dropAxis(CalibrationReason.ORIENTATION_CHANGED, join("tilt changed by ${change.fmt0()}°", detail))
+            turnedAroundVertical -> {
+                unverified = true
+                if (beforeSuspend == CalibrationState.READY) {
+                    suspendReason = CalibrationReason.AXIS_UNCONFIRMED
+                    lastReason = CalibrationReason.AXIS_UNCONFIRMED
+                    notify(state, CalibrationReason.AXIS_UNCONFIRMED, join("tilt ${change.fmt0()}°", detail))
+                } else {
+                    resume(CalibrationReason.AXIS_UNCONFIRMED, join("tilt ${change.fmt0()}°", detail))
+                }
+            }
+            inconsistent -> {
+                suspendReason = CalibrationReason.SENSOR_DATA_INCONSISTENT
+                lastReason = CalibrationReason.SENSOR_DATA_INCONSISTENT
+                notify(state, CalibrationReason.SENSOR_DATA_INCONSISTENT, join("still inconsistent; tilt ${change.fmt0()}°", detail))
+            }
+            else -> resume(CalibrationReason.PHONE_STABLE_SAME_ORIENTATION, join("tilt ${change.fmt0()}°", detail))
         }
     }
 
     val isPhoneMoving: Boolean get() = phoneMoving
 
-    private fun suspend(reason: CalibrationReason) {
+    /** The axis is kept after a rotation while handled and waits for a GPS lesson to confirm it. */
+    val isAxisUnconfirmed: Boolean get() = unverified
+
+    private fun suspend(reason: CalibrationReason, detail: String) {
+        if (reason == CalibrationReason.SENSOR_DATA_INCONSISTENT) inconsistent = true
         suspendReason = reason
         if (state == CalibrationState.SUSPENDED) {
             lastReason = reason
             return
         }
         beforeSuspend = state
-        move(CalibrationState.SUSPENDED, reason)
+        move(CalibrationState.SUSPENDED, reason, detail)
     }
 
-    private fun resume(reason: CalibrationReason) {
+    private fun resume(reason: CalibrationReason, detail: String = "") {
         if (state != CalibrationState.SUSPENDED) return
         if (phoneMoving) return
         suspendReason = null
-        move(beforeSuspend, reason)
+        move(beforeSuspend, reason, detail)
     }
 
-    private fun dropAxis(reason: CalibrationReason) {
+    private fun dropAxis(reason: CalibrationReason, detail: String = "") {
         hasAxis = false
         lessons = 0
         quality = 0f
@@ -378,21 +537,34 @@ class VehicleFrameEstimator {
         lessonWeight = 0f
         contradictions.clear()
         mismatches = 0
+        inconsistent = false
+        unverified = false
         suspendReason = null
         if (phoneMoving) {
             beforeSuspend = CalibrationState.UNCALIBRATED
             lastReason = reason
         } else {
-            move(CalibrationState.UNCALIBRATED, reason)
+            move(CalibrationState.UNCALIBRATED, reason, detail)
         }
     }
 
-    private fun move(to: CalibrationState, reason: CalibrationReason) {
+    private fun move(to: CalibrationState, reason: CalibrationReason, detail: String = "") {
         lastReason = reason
         val from = state
         if (from == to) return
         state = to
-        onTransition?.invoke(from, to, reason)
+        notify(from, reason, detail)
+        stateSince = nowMs
+    }
+
+    /** Tells [onTransition] about the change from [from] to the current state, with its conditions. */
+    private fun notify(from: CalibrationState, reason: CalibrationReason, detail: String) {
+        lastTransition = CalibrationTransition(
+            from, state, reason, quality, lessons,
+            if (stateSince == 0L || nowMs < stateSince) -1L else nowMs - stateSince,
+            orientationChangeDeg(), detail
+        )
+        onTransition?.invoke(from, state, reason)
     }
 
     private fun rememberUp() {
@@ -413,6 +585,17 @@ class VehicleFrameEstimator {
         if (n > 1e-6f) for (i in 0..2) v[i] /= n
     }
 
+    private fun angleDeg(a: FloatArray, b: FloatArray): Int {
+        val na = norm(a)
+        val nb = norm(b)
+        if (na < 1e-6f || nb < 1e-6f) return 0
+        return Math.toDegrees(kotlin.math.acos((dot(a, b) / (na * nb)).coerceIn(-1f, 1f).toDouble())).toInt()
+    }
+
+    private fun Float.fmt() = if (isNaN()) "n/a" else String.format(Locale.US, "%.2f", this)
+    private fun Float.fmt0() = if (isNaN()) "n/a" else String.format(Locale.US, "%.0f", this)
+    private fun join(a: String, b: String) = if (b.isEmpty()) a else "$a; $b"
+
     companion object {
         /** Consistent lessons needed before READY, and how well they must agree. */
         const val MIN_LESSONS = 3
@@ -422,6 +605,12 @@ class VehicleFrameEstimator {
         private const val LESSON_MIN_GPS_ACCEL = 0.6f
         private const val LESSON_MIN_SPEED_MPS = 5f / 3.6f
         private const val LESSON_MAX_YAW = 0.12f            // rad/s, mean over the interval
+
+        /**
+         * Wave 8: "straight" also at speed — the centripetal acceleration (speed × mean |yaw rate|) may be at most this
+         * share of the GPS acceleration, so it turns the lesson's direction by less than ≈ 27°.
+         */
+        const val LESSON_MAX_LATERAL_SHARE = 0.5f
 
         /** Mean horizontal acceleration below this says nothing about the direction. */
         private const val LESSON_MIN_ACCEL = 0.35f
@@ -443,11 +632,13 @@ class VehicleFrameEstimator {
         /** Contradictions in a row that replace (agreeing among themselves) or suspend the axis. */
         private const val MAX_CONTRADICTIONS = 3
         private const val SELF_AGREE_COS = 0.8f
+
+        /** Mismatches in a row (no fitting interval between them, each within [MISMATCH_WINDOW_MS]) that suspend. */
         private const val MAX_MISMATCHES = 3
+        const val MISMATCH_WINDOW_MS = 30_000L
 
         /** The phone still within this angle of the learned orientation keeps the axis. */
         const val SAME_ORIENTATION_DEG = 15.0
-        private val SAME_ORIENTATION_COS = kotlin.math.cos(Math.toRadians(SAME_ORIENTATION_DEG)).toFloat()
 
         /** The axis projected on the horizontal plane must keep this much of its length (tilt < ~45°). */
         private const val MIN_PROJECTION = 0.7f

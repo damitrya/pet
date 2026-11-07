@@ -31,6 +31,14 @@ data class CarMotionConfig(
     /** A manoeuvre must stay above its threshold this long (bumps and jolts are shorter). */
     val sustainMs: Long = 300L,
 
+    /**
+     * Wave 8: a dip below the threshold at most this long does not break the [sustainMs] count. The smoothed
+     * signal of a real manoeuvre hovers around its threshold (road texture, the steering wheel corrected); before,
+     * every 20 ms dip restarted the count, so a 2 s braking at 1.1–1.4 m/s² never "held" 300 ms. Bumps stay out:
+     * the time above the threshold must still add up to [sustainMs] in one run, with dips this short only.
+     */
+    val dipToleranceMs: Long = 150L,
+
     /** ...and below the release level this long to end (a short dip does not start a second reaction). */
     val endMs: Long = 400L,
 

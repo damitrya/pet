@@ -129,6 +129,9 @@ class StateMachine(
     private var inertiaAt: Long = 0L
     private var strongInertiaAt: Long = 0L
 
+    /** When the last ALERT started (0: none): the braking it showed gets no lean as well ([ALERT_COVERS_BRAKE_MS]). */
+    private var alertStartedAt: Long = 0L
+
     /** Thresholds of the car physics (only the lean pause is read here). */
     var carMotion: CarMotionConfig = CarMotionConfig.DEFAULT
 
@@ -285,6 +288,7 @@ class StateMachine(
         movementStoppedAt = 0L
         inertiaAt = 0L
         strongInertiaAt = 0L
+        alertStartedAt = 0L
         restartReactions()
     }
 
@@ -402,6 +406,7 @@ class StateMachine(
         diagRequest(CompanionState.ALERT, RequestResult.STARTED, null)
 
         alertActive = true
+        alertStartedAt = clock()
         petActive = false
         tapQueued = false
         lastActivityAt = clock()
@@ -702,7 +707,11 @@ class StateMachine(
      * - never over ALERT, petting, other reactions to the user, trip events or a sharp turn; the same lean is never
      *   restarted while it plays (a long manoeuvre is one reaction);
      * - leans of one level are at least [CarMotionConfig.softCooldownMs] apart (an ordinary one also after a sharp
-     *   turn); the switch "React to braking and turns" turns them off.
+     *   turn); the switch "React to braking and turns" turns them off;
+     * - wave 8: braking that ALERT has shown (the old emergency detector and the car physics see the same braking,
+     *   with different thresholds) plays no INERTIA_FORWARD as well, up to [ALERT_COVERS_BRAKE_MS] after the ALERT
+     *   started — not during ALERT / RELIEF, and not right after them ([DiagnosticReason.ALREADY_SHOWN]). A lean that
+     *   plays when ALERT comes is cut by it (ALERT interrupts everything).
      */
     fun onCarMotion(event: CarMotionEvent) {
         val target = when (event.kind) {
@@ -717,6 +726,9 @@ class StateMachine(
 
         if (profile != AppProfile.AUTO) return
         if (!settings.sensorReactionEnabled) return reject(DiagnosticReason.REACTIONS_DISABLED, "switched off in the settings")
+        if (event.kind == InertiaKind.BRAKE && alertStartedAt != 0L && clock() - alertStartedAt < ALERT_COVERS_BRAKE_MS) {
+            return reject(DiagnosticReason.ALREADY_SHOWN, "braking shown by ALERT ${clock() - alertStartedAt} ms ago")
+        }
         if (alertActive) return reject(DiagnosticReason.STATE_BLOCKED, "ALERT playing")
         if (currentState == target) return reject(DiagnosticReason.STATE_BLOCKED, "the same lean is playing")
         val strong = event.level == InertiaLevel.STRONG
@@ -1123,6 +1135,12 @@ class StateMachine(
 
     companion object {
         private const val ALERT_COOLDOWN_MS = 3000L
+
+        /**
+         * After an ALERT starts, a braking lean is the same braking shown again: the fox's ALERT and RELIEF take 3.6 s
+         * (2.0 + 1.6 s; the older alert file 4.2 s), and an emergency stop from 90 km/h at −4 m/s² lasts about 6 s.
+         */
+        const val ALERT_COVERS_BRAKE_MS = 8_000L
 
         /** A one-shot that has not finished after this long is ended by force (no stuck states). */
         const val ONE_SHOT_TIMEOUT_MS = 15_000L

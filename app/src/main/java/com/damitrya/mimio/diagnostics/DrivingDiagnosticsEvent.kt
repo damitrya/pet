@@ -28,9 +28,15 @@ import java.util.Locale
  * - [PHONE_MOVING]: the phone is probably being moved relative to the car (handled, turned, taken out of the holder).
  * - [CALIBRATION_UNRELIABLE]: the car's forward axis is not known well enough for a longitudinal lean.
  * - [INERTIA_COOLDOWN]: a lean played less than 4 s ago.
- * - [EVENT_TOO_SHORT]: a manoeuvre crossed its threshold, but not for the required 300 ms.
+ * - [EVENT_TOO_SHORT]: a manoeuvre crossed its threshold, and the whole event (first to last sample at the
+ *   threshold) lasted less than the required 300 ms.
  * - [SENSOR_DATA_INCONSISTENT]: accelerometer and GPS speed changes keep contradicting each other.
  * - [REACTIONS_DISABLED]: the user switched the leans and sharp-turn reactions off (settings → AUTO).
+ *
+ * Wave 8:
+ * - [THRESHOLD_NOT_SUSTAINED]: the event lasted 300 ms or longer, but the value kept falling below the threshold
+ *   (dips longer than [com.damitrya.mimio.data.CarMotionConfig.dipToleranceMs]): no run above it held 300 ms.
+ * - [ALREADY_SHOWN]: the same physical manoeuvre already has a stronger reaction (braking shown by ALERT).
  */
 enum class DiagnosticReason {
     GPS_MISSING,
@@ -51,7 +57,9 @@ enum class DiagnosticReason {
     INERTIA_COOLDOWN,
     EVENT_TOO_SHORT,
     SENSOR_DATA_INCONSISTENT,
-    REACTIONS_DISABLED
+    REACTIONS_DISABLED,
+    THRESHOLD_NOT_SUSTAINED,
+    ALREADY_SHOWN
 }
 
 /** What became of a request for a car reaction. */
